@@ -1,0 +1,56 @@
+# QQ 群作业扫描 → 主动询问加入日程 服务配置（模板）
+# 请复制为 config.yaml 后填入本机值。
+# 重要：NapCat 必须仅监听 127.0.0.1，且 access_token 必须为强随机串，绝不暴露公网。
+
+qq:
+  # NapCat 暴露的 OneBot 11 正向 WebSocket 地址（默认端口 3001）
+  onebot_ws_url: "ws://127.0.0.1:3001"
+  # NapCat 中配置的强 token（务必改掉默认示例，且只绑本地）
+  access_token: "your-strong-random-token"
+  # 登录 NapCat 的机器人小号 QQ 号（用于读群 + 发私聊）
+  bot_user_id: 0000000000
+  # 你的主号 QQ 号（接收作业确认私聊、回复指令）
+  owner_user_id: 0000000000
+  # 仅扫描这些群（群号列表）；留空 [] 表示扫描所有群
+  group_whitelist: []
+  # 显式指定老师 QQ 号（无论角色）
+  teacher_user_ids: []
+  # 视为「老师」的群角色：owner=群主, admin=管理员
+  leader_roles:
+    - owner
+    - admin
+
+detector:
+  # 关键词预过滤：命中任一才调用模型，省算力、控频率
+  keyword_prefilter:
+    - "作业"
+    - "截止"
+    - "交"
+    - "ddl"
+    - "周"
+    - "实验"
+    - "论文"
+    - "预习"
+    - "复习"
+    - "考试"
+    - "测验"
+    - "任务"
+    - "安排"
+  # 模型调用最小间隔（秒），防刷屏 / 风控
+  throttle_seconds: 2
+  # 低于此置信度视为非作业，直接静默丢弃（与 prompt 中告知模型的标准一致）
+  min_confidence: 0.6
+  # 高于此置信度视为高把握，不经确认直接写入日历（0.6~0.9 之间则询问主人）
+  auto_confidence: 0.85
+
+scheduler:
+  # 现有日程系统的接收端点（本服务 POST 结构化作业数据，由它创建 iCloud 提醒）
+  endpoint: "http://127.0.0.1:8000/api/chat"
+  timeout: 125
+
+storage:
+  db_path: "qq_homework.db"
+
+notifier:
+  # 等待你确认 / 取消的超时时间（秒）；超时自动忽略
+  confirm_timeout_seconds: 10000

@@ -1,0 +1,9 @@
+# iCloud CalDAV 配置模板（请复制为 calendar.conf 并填入真实凭据）
+# 注意：应用专用密码不等于 Apple ID 密码，需在 appleid.apple.com 的
+# 「安全」→「App 专用密码」中生成，格式形如 xxxx-xxxx-xxxx-xxxx
+default:
+  caldav_url: https://caldav.icloud.com/
+  caldav_username: your-apple-id@icloud.com
+  caldav_password: xxxx-xxxx-xxxx-xxxx
+  features:
+    todos: true

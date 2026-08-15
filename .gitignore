@@ -1,0 +1,30 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ===== 环境变量与机密配置（含真实密码 / token，禁止提交） =====
+.env
+.config/caldav/calendar.conf
+.config/hmwk_scnr/config.yaml
+
+# ===== 运行产物（数据库 / 日志） =====
+*.db
+*.sqlite
+*.sqlite3
+guardian.log
+*.log
+
+# ===== 编辑器 / IDE =====
+.vscode/
+.idea/
+
+# ===== 内部工具目录（WorkBuddy 记忆等，非项目代码） =====
+.workbuddy/
+
+# ===== 系统 / 操作系统 =====
+.DS_Store
+Thumbs.db

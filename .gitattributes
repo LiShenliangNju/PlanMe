@@ -1,0 +1,8 @@
+# 统一换行：Python 源码强制 LF，规避 Windows CRLF 引发的语法/差异问题
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.bat text eol=crlf
+*.sh text eol=lf

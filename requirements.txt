@@ -1,0 +1,26 @@
+# Planme 统一依赖清单
+# 安装：pip install -r requirements.txt
+
+# Web / API
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.0
+pydantic-settings>=2.0
+python-dotenv>=1.0
+
+# LLM（本地 Ollama）
+ollama>=0.1.0
+
+# 日历同步（iCloud CalDAV）
+caldav>=1.0
+
+# QQ 作业扫描器
+aiosqlite>=0.19
+websockets>=12.0
+pyyaml>=6.0
+
+# Web 界面（Streamlit）
+streamlit>=1.30
+
+# 工具
+requests>=2.31
