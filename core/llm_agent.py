@@ -15,6 +15,7 @@ from ollama import Client
 
 from schemas.schedule_schema import CalendarItemSchema
 from core.calendar_sync import iCloudCalendarManager
+from core.ollama_gpu import inference_lock
 
 
 class PlanmeAgent:
@@ -48,7 +49,7 @@ class PlanmeAgent:
         content = message.get("content", "")
         return {"type": "text", "reply": content}
 
-    def process_query(self, user_text: str) -> dict:
+    async def process_query(self, user_text: str) -> dict:
         tz = ZoneInfo(settings.TIMEZONE)
         now_str = datetime.now(tz).strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -71,19 +72,22 @@ class PlanmeAgent:
             try:
                 start_time = time.time()
 
-                response = self.client.chat(
-                    model=self.model,
-                    messages=messages,
-                    tools=list(self.tools.values()),
-                    options={
-                        "num_ctx": 4096,
-                        "num_gpu": 99,
-                        "temperature": 0.0,
-                        "num_predict": 512,
-                        "repeat_penalty": 1.05,
-                        "top_p": 0.9,
-                    },
-                )
+                # 抢全局 GPU 锁，与文本检测 / 图片 OCR 互斥，避免单卡并发 swap
+                async with inference_lock:
+                    response = await asyncio.to_thread(
+                        self.client.chat,
+                        model=self.model,
+                        messages=messages,
+                        tools=list(self.tools.values()),
+                        options={
+                            "num_ctx": 4096,
+                            "num_gpu": 99,
+                            "temperature": 0.0,
+                            "num_predict": 512,
+                            "repeat_penalty": 1.05,
+                            "top_p": 0.9,
+                        },
+                    )
 
                 elapsed = time.time() - start_time
                 message = response.message.model_dump()

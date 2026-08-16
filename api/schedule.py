@@ -27,7 +27,7 @@ async def handle_chat(request: ChatRequest):
         raise HTTPException(status_code=400, detail="输入内容不能为空")
 
     try:
-        ai_result = agent.process_query(request.text)
+        ai_result = await agent.process_query(request.text)
         result_type = ai_result.get("type")
 
         # 情况 A: 仅纯文本交流

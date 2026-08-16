@@ -8,6 +8,7 @@ from typing import Optional
 from ollama import Client
 
 from schemas.homework_schema import HomeworkExtraction
+from core.ollama_gpu import inference_lock
 
 logger = logging.getLogger("detector")
 
@@ -56,6 +57,7 @@ class HomeworkDetector:
         throttle_seconds: float,
         min_confidence: float,
         auto_confidence: float = 0.9,
+        gpu_lock: "asyncio.Lock | None" = None,
     ) -> None:
         self._client = Client(host=host)
         self.model = model
@@ -66,6 +68,8 @@ class HomeworkDetector:
         self._throttle = throttle_seconds
         self._last_call = 0.0
         self._lock = asyncio.Lock()
+        # 全局 GPU 推理锁：与图片 OCR / 主系统对话互斥，避免单卡并发 swap
+        self._gpu_lock = gpu_lock or inference_lock
 
     def prefilter(self, text: str) -> bool:
         """命中任一关键词才值得调模型。"""
@@ -85,16 +89,18 @@ class HomeworkDetector:
             user_content = f"【上下文/来源】{context}\n【消息内容】{text}"
 
         try:
-            resp = await asyncio.to_thread(
-                self._client.chat,
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": _build_system_prompt()},
-                    {"role": "user", "content": user_content},
-                ],
-                format=HomeworkExtraction.model_json_schema(),
-                options={"temperature": self.temperature},
-            )
+            # 真正调模型前抢全局 GPU 锁，与 OCR / 主系统对话互斥（一个跑另一个 pending）
+            async with self._gpu_lock:
+                resp = await asyncio.to_thread(
+                    self._client.chat,
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": _build_system_prompt()},
+                        {"role": "user", "content": user_content},
+                    ],
+                    format=HomeworkExtraction.model_json_schema(),
+                    options={"temperature": self.temperature},
+                )
             content = resp["message"]["content"]
             data = json.loads(content)
             result = HomeworkExtraction(**data)
