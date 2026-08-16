@@ -20,13 +20,19 @@ async def lecture_notes(limit: int = 100):
         await db.execute("PRAGMA journal_mode=WAL")
         cur = await db.execute(
             "SELECT id, message_id, image_seq, group_id, group_name, user_id, "
-            "image_url, ocr_md, status, created_at, ocr_at FROM lecture_notes "
-            "ORDER BY created_at DESC LIMIT ?",
+            "image_url, local_path, ocr_md, status, attempts, error, created_at, ocr_at "
+            "FROM lecture_notes ORDER BY created_at DESC LIMIT ?",
             (limit,),
         )
         rows = await cur.fetchall()
         cols = [d[0] for d in cur.description]
+        notes = [dict(zip(cols, r)) for r in rows]
+        # 队列积压：pending 表示已落库存档、OCR 还在排队（本地模型慢时会有一批）
+        cur2 = await db.execute(
+            "SELECT COUNT(*) FROM lecture_notes WHERE status='pending'"
+        )
+        row2 = await cur2.fetchone()
         await db.close()
-        return {"notes": [dict(zip(cols, r)) for r in rows]}
+        return {"notes": notes, "pending": int(row2[0]) if row2 else 0}
     except Exception as exc:
-        return {"notes": [], "error": str(exc)}
+        return {"notes": [], "pending": 0, "error": str(exc)}

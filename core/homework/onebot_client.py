@@ -32,11 +32,14 @@ class OneBotClient:
         access_token: str,
         on_event: EventHook,
         reconnect_delay: float = 5.0,
+        on_ready: Optional[Callable[[], Awaitable[None]]] = None,
     ) -> None:
         self.ws_url = ws_url
         self.access_token = access_token
         self.on_event = on_event
         self.reconnect_delay = reconnect_delay
+        # 连接建立后触发（用于历史补抓：必须等 WS 可用才能调 API）
+        self.on_ready = on_ready
 
         self._ws: Optional[ClientConnection] = None
         self._echo_counter = 0
@@ -67,7 +70,16 @@ class OneBotClient:
         async with websockets.connect(url) as ws:  # type: ignore[assignment]
             self._ws = ws
             logger.info("OneBot WS 已连接")
+            if self.on_ready is not None:
+                # 补抓等「连上才能做」的动作放这里，且不阻塞事件循环
+                asyncio.create_task(self._safe_ready())
             await self._loop(ws)
+
+    async def _safe_ready(self) -> None:
+        try:
+            await self.on_ready()  # type: ignore[misc]
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("on_ready 回调出错：%s", exc)
 
     async def _loop(self, ws: ClientConnection) -> None:
         async for raw in ws:
@@ -116,6 +128,61 @@ class OneBotClient:
         return await self.send_action(
             "send_private_msg", {"user_id": int(user_id), "message": text}
         )
+
+    # ------------------------------------------------------------------
+    # 历史消息拉取：push 模式下 NapCat 只推「连接期间」的新消息，
+    # 进程没跑的时段（例如守护进程的抓取窗口之外）消息不会重放。
+    # 因此启动时必须主动调 get_group_msg_history 把空窗期补回来。
+    # ------------------------------------------------------------------
+    async def get_group_msg_history(
+        self,
+        group_id: int,
+        message_seq: Optional[int] = None,
+        count: int = 20,
+    ) -> list[dict]:
+        """拉取群历史消息，按时间正序返回。
+
+        message_seq 为分页锚点（取该消息之前的更早消息）；不传则从最新开始。
+        NapCat 对 message_seq 实际接受 message_id，且不同版本字段名不完全一致，
+        这里统一容错处理并自己按 time 排序，不依赖服务端返回顺序。
+        """
+        params: dict = {"group_id": int(group_id), "count": int(count)}
+        if message_seq:
+            params["message_seq"] = int(message_seq)
+        try:
+            data = await self.send_action("get_group_msg_history", params)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("拉取群 %s 历史消息失败：%s", group_id, exc)
+            return []
+        if isinstance(data, list):
+            msgs = data
+        else:
+            msgs = (data or {}).get("messages") or []
+        if not isinstance(msgs, list):
+            return []
+        msgs = [m for m in msgs if isinstance(m, dict)]
+        msgs.sort(key=lambda m: int(m.get("time") or 0))
+        return msgs
+
+    async def get_group_list(self) -> list[dict]:
+        """取机器人已加入的群列表（仅在开启全量补抓时使用）。"""
+        try:
+            data = await self.send_action("get_group_list", {})
+            if isinstance(data, list):
+                return [g for g in data if isinstance(g, dict)]
+            return []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("获取群列表失败：%s", exc)
+            return []
+
+    async def get_group_info(self, group_id: int) -> dict:
+        """取群信息（主要为了给历史消息补上群名，history 里通常不带）。"""
+        try:
+            data = await self.send_action("get_group_info", {"group_id": int(group_id)})
+            return data or {}
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("获取群 %s 信息失败：%s", group_id, exc)
+            return {}
 
     # ------------------------------------------------------------------
     # 图片下载：NapCat 收到群图片后会在本地缓存。优先用 OneBot 标准

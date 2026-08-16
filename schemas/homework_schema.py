@@ -65,7 +65,14 @@ class HomeworkItem(BaseModel):
 
 
 class LectureNote(BaseModel):
-    """白名单群里的图片经 OCR 后得到的 Markdown 笔记（讲座/通知存档）。"""
+    """白名单群里的图片经 OCR 后得到的 Markdown 笔记（讲座/通知存档）。
+
+    生命周期（先落库、后 OCR，保证杀进程/重启不丢）：
+      1. 图片一到 → 落盘到本地 image_dir，写库 status='pending'（此时 ocr_md 为空）；
+      2. OCR worker 从队列/库里取出 pending → 跑模型 → 回填 ocr_md，status='active'；
+      3. 连续失败超过上限 → status='error'，error 字段记录原因。
+    因此 db 是「任务队列 + 存档」双重角色，local_path 是重启后能续跑的关键锚点。
+    """
 
     message_id: int
     image_seq: int = 0            # 同一条消息里第几张图（从 0 开始），与 message_id 组成唯一键
@@ -73,7 +80,23 @@ class LectureNote(BaseModel):
     group_name: str = ""
     user_id: int = 0
     image_url: str = ""           # 原图 url（CQ 码里的 url）
+    local_path: str = ""          # 图片本地持久化路径（重启后 OCR 可续跑的锚点）
     ocr_md: str = ""              # OCR 得到的 Markdown 文本
-    status: str = "active"        # active（已存档）/ archived（已归档）/ error（OCR 失败）
+    status: str = "pending"       # pending（待OCR）/ active（已存档）/ error（OCR 失败）/ archived
+    attempts: int = 0             # 已尝试 OCR 次数（超过上限置 error，避免死循环）
+    error: str = ""               # 最近一次失败原因
     created_at: int = 0           # 抓取时间（unix）
     ocr_at: int = 0               # OCR 完成时间（unix）
+
+
+class GroupProgress(BaseModel):
+    """每个群「已处理到哪」的断点，用于进程重启 / 窗口外空档的历史补抓。
+
+    push 模式下 NapCat 不重放历史消息，因此必须自己记锚点：
+    启动时读出 last_message_id / last_time，调 get_group_msg_history 往前补。
+    """
+
+    group_id: int
+    last_time: int = 0            # 最后处理到的消息时间戳（unix）
+    last_message_id: int = 0      # 最后处理到的 message_id（补抓分页锚点）
+    updated_at: int = 0           # 本行更新时间（unix）
