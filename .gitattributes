@@ -6,3 +6,6 @@
 *.md text eol=lf
 *.bat text eol=crlf
 *.sh text eol=lf
+
+# 兜底：其余文本文件统一 LF（含 .txt / 无扩展名 / 配置等未被上列覆盖者）
+* text=auto eol=lf

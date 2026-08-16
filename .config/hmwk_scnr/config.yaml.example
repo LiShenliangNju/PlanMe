@@ -61,12 +61,42 @@ notifier:
 #   - image.group_whitelist 是「图片白名单群」，群内所有图片都视为讲座 / 通知，
 #     直接 OCR 存档，不要求发送人是老师。
 # 留空 [] 表示「关闭图片抓取」（不会消耗 OCR 算力）。
+#
+# 处理顺序是「先落库、后 OCR」：图片一到先落盘 + 写库 status=pending，
+# 再由后台 worker 排队慢慢 OCR，因此算力慢 / 队列积压 / 进程被杀都不丢图，
+# 重启后自动把 pending 的图继续跑完。
 image:
   # 仅这些群里的图片会被抓取并 OCR（群号列表）；留空 = 关闭
   group_whitelist: []
   # OCR 使用的本地视觉模型（需先 `ollama pull qwen2.5vl:7b`）
   model: "qwen2.5vl:7b"
-  # 两次 OCR 调用的最小间隔（秒），防刷屏 / 风控
-  throttle_seconds: 3
-  # 同一时刻最多并发 OCR 的图片数（显存紧张时调小）
-  max_concurrency: 2
+  # 同一时刻最多并发 OCR 的图片数（= worker 数，显存紧张时保持 1）
+  max_concurrency: 1
+  # 两次 OCR 调用的最小间隔（秒）。0 = 不额外空等，串行由 max_concurrency 保证
+  throttle_seconds: 0
+  # 模型常驻显存时长（不设则 Ollama 默认 5 分钟卸载，下张图要重新加载权重）
+  keep_alive: "30m"
+  # 上下文长度：默认过大时 KV cache 会挤占显存导致 CPU offload、速度骤降
+  num_ctx: 8192
+  # 单张图最多输出多少 token
+  num_predict: 2048
+  # 单次请求超时（秒）
+  request_timeout: 300
+  # 启动时预热模型（提前装显存，第一张图不等冷启动）
+  warmup: true
+  # 同一张图最多尝试 OCR 几次，超过则标记 error
+  retry_max: 2
+  # 图片持久化目录（相对路径以项目根为基准），落盘后才能重启续跑
+  image_dir: "data/lecture_images"
+
+# 历史补抓：NapCat 是 push 模式，只推「连接期间」的新消息，
+# 进程没跑的时段不会重放。启动时按 group_progress 断点把空窗期补回来。
+catchup:
+  enabled: true
+  page_size: 50
+  max_pages: 5
+  max_messages_per_group: 200
+  max_age_hours: 72
+  min_interval_seconds: 300
+  # true = 所有已加入的群都补抓（历史量大，谨慎）；false = 仅白名单 + 有断点的群
+  include_all_groups: false
