@@ -22,5 +22,9 @@ pyyaml>=6.0
 # Web 界面（Streamlit）
 streamlit>=1.30
 
+# 测试辅助（可选）：test/qwenvl_ocr.py 无参自动生成测试图时需要
+# 仅本地跑视觉 OCR 测试且未提供图片路径时才用到；不装也能跑（传图路径即可）
+Pillow>=10.0
+
 # 工具
 requests>=2.31

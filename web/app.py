@@ -209,19 +209,30 @@ with tab4:
     if st.button("🔄 刷新", key="lecture_refresh"):
         st.rerun()
     try:
-        notes = requests.get(f"{API_BASE_URL}/lecture/notes", timeout=5).json().get("notes", [])
+        res = requests.get(f"{API_BASE_URL}/lecture/notes", timeout=5).json()
+        notes = res.get("notes", [])
+        pending = res.get("pending", 0)
     except Exception:
-        notes = []
+        notes, pending = [], 0
     st.markdown(f"**📚 笔记（db，{len(notes)}）**")
+    if pending:
+        st.info(f"⏳ 有 {pending} 张图片已存档、正在排队 OCR（本地模型串行处理，可稍后刷新）")
     if not notes:
         st.caption("白名单群里还没有抓到图片，或 image.group_whitelist 未配置")
     for n in notes:
         ts = datetime.fromtimestamp(n.get("created_at", 0)).strftime("%Y-%m-%d %H:%M")
         grp = n.get("group_name") or n.get("group_id")
         status = n.get("status")
-        icon = "✅" if status == "active" else "⚠️"
-        with st.expander(f"📄 {grp} · {ts} · {icon}"):
+        icon = {"active": "✅", "pending": "⏳", "error": "⚠️"}.get(status, "⚪")
+        label = {"active": "", "pending": " · 排队 OCR 中", "error": " · OCR 失败"}.get(status, "")
+        with st.expander(f"📄 {grp} · {ts} · {icon}{label}"):
             if n.get("image_url"):
                 st.markdown(f"[🔗 原图链接]({n['image_url']})")
-            md = n.get("ocr_md") or "（OCR 未返回内容）"
-            st.markdown(md)
+            if n.get("local_path"):
+                st.caption(f"本地存档：`{n['local_path']}`")
+            if status == "pending":
+                st.caption("图片已落盘存档，OCR 排队中；进程重启后会自动继续。")
+            elif status == "error":
+                st.warning(f"OCR 失败（已尝试 {n.get('attempts', 0)} 次）：{n.get('error') or '未知原因'}")
+            else:
+                st.markdown(n.get("ocr_md") or "（OCR 未返回内容）")
