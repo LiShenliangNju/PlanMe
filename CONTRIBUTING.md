@@ -14,10 +14,20 @@
 ## 二、开发环境准备
 
 ```bash
+# 1) 先到 https://github.com/LiShenliangNju/PlanMe 点击 Fork，把仓库 fork 到你的账号
+# 2) 克隆你自己的 fork（把 <你的用户名> 换成你的 GitHub 用户名）
 git clone https://github.com/<你的用户名>/PlanMe.git
 cd PlanMe
-python -m venv .venv && source .venv/bin/activate   # 或你习惯的虚拟环境
+# 3) 添加上游仓库，方便后续把主干改动同步到你的 fork
+git remote add upstream https://github.com/LiShenliangNju/PlanMe.git
+
+# 创建并激活虚拟环境（任选其一）
+python -m venv .venv && source .venv/bin/activate   # Linux / macOS
+# .venv\Scripts\activate                              # Windows (PowerShell)
+
 pip install -r requirements.txt
+
+# 复制配置模板（真实配置不入库，按需填写）
 cp .env.example .env
 cp .config/caldav/calendar.conf.example .config/caldav/calendar.conf
 ```

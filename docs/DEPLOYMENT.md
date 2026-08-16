@@ -118,9 +118,25 @@ ollama list                   # 确认模型已存在
 image:
   group_whitelist: [123456789]   # 填入讲座 / 通知群的群号；留空 [] = 关闭
   model: "qwen2.5vl:7b"
-  throttle_seconds: 3            # 两次 OCR 最小间隔，防刷屏
-  max_concurrency: 2             # 并发 OCR 上限，显存紧张调小为 1
+  max_concurrency: 1             # OCR worker 数（= 并发上限，显存紧张保持 1）
+  throttle_seconds: 0            # 0 = 不额外空等，串行由 max_concurrency 保证
+  keep_alive: "30m"              # 模型常驻显存，避免每张图重新加载权重（治冷启动卡顿）
+  num_ctx: 8192                  # 上下文长度，过大易触发 CPU offload 拖慢速度
+  num_predict: 2048              # 单张图最大输出 token
+  request_timeout: 300           # 单次 OCR 超时（秒）
+  warmup: true                   # 启动时预热模型，第一张图不等冷启动
+  retry_max: 2                   # 单图最大重试次数，超过标记 error
+  image_dir: "data/lecture_images"  # 图片落盘目录（重启续跑依赖它）
+# 历史补抓：NapCat 是 push 模式，进程离线时段的消息在启动时按断点补回
+catchup:
+  enabled: true                  # 关闭则启动时不再补抓
+  page_size: 50                  # 每次 get_group_msg_history 拉取的条数
+  max_pages: 5                   # 单群最多翻页数（50×5=250 条上限）
+  max_age_hours: 72              # 只补最近 72 小时内的消息
+  include_all_groups: false      # false=仅白名单+有断点群；true=所有已加入群（历史量大慎用）
 ```
+
+> **处理顺序（重要）**：图片一到先**落盘 + 写库 `status=pending`**，再由后台 OCR worker 排队慢慢解析（解析完成改 `active`，失败改 `error`）。因此进程被杀 / OCR 失败 / 重启都不丢图，pending 项会自动续跑。文本识别、图片 OCR、主系统对话三路共用一把**全局 GPU 推理锁**（`core/ollama_gpu.py`），同一时刻只有一次 Ollama 推理在跑，单张 8GB 卡不会被两模型并发争抢。
 
 **与作业扫描的区别（容易混淆）**：
 
@@ -130,17 +146,20 @@ image:
 | 消息类型 | 文本 | 图片 |
 | 发送者限制 | **仅老师**（`teacher_roles` / `teacher_user_ids`） | **不限**，群内任何人 |
 | 触发条件 | 命中关键词预过滤 | 消息里含图片即触发 |
-| 落库表 | `homework_items` | `lecture_notes` |
+| 落库表 | `homework_items` | `lecture_notes`（先 `pending` 再 OCR） |
 
 ### 3.3 验证
 
 1. 重启主系统（`python main.py`）；
 2. 在图片白名单群里发一张**带文字的图**（讲座海报、通知截图都行）；
-3. 观察日志出现 OCR 相关记录（首次调用视觉模型会较慢，需加载模型权重）；
-4. 打开 Web 的「🖼️ 讲座/通知」页，应看到渲染后的 Markdown 与原图链接；
+3. 观察日志：图片先落盘到 `data/lecture_images/`、写库 `status=pending`，随后 OCR worker 消费、改为 `active`（首次调用视觉模型会较慢，需加载模型权重；`keep_alive` 让它常驻后不再反复冷启动）；
+4. 打开 Web 的「🖼️ 讲座/通知」页，应看到渲染后的 Markdown 与原图链接（pending 显示 ⏳、active ✅、error ⚠️）；
 5. 或直接查接口：`curl http://localhost:8000/api/lecture/notes?limit=3`。
+6. （推荐）跑视觉模型离线验证：`python test/qwenvl_ocr.py`（无参会自动用 Pillow 生成测试图；也可传图片路径）。该脚本会先确认 `qwen2.5vl:7b` 已拉取，再调用 `ImageOCR` 打印 Markdown，输出非空即链路通畅。
+7. **重启续跑验证**：发图后、OCR 完成前杀掉主系统再重启，pending 项应被自动续跑直至 `active`——这是验证「先落库后 OCR」是否生效的最快方法。
+8. 跑全链路离线自检（无需 Ollama）：`python test/queue_catchup_check.py`，28 项全过即迁移/断点/去重/队列状态机/补抓/GPU 锁均正常。
 
-> 若返回 `status: error`，说明图片抓到了但 OCR 失败——记录仍保留（含 `image_url`），排掉原因后可重跑。
+> 若返回 `status: error`，说明图片抓到了但 OCR 失败——记录仍保留（含 `local_path` 与 `image_url`），排掉原因后可重跑。
 
 ---
 
@@ -180,11 +199,13 @@ guardian.bat uninstall  # 移除自启任务
 | --- | --- | --- |
 | 发图后完全无反应 | `image.group_whitelist` 为空或群号不在其中 | 填入群号后**重启主系统**（配置在启动时读取） |
 | `model not found` / OCR 全失败 | 视觉模型未拉取，或 `image.model` 与实际模型名不一致 | `ollama pull qwen2.5vl:7b` 后 `ollama list` 核对名称 |
-| 首张图 OCR 极慢 | 视觉模型首次加载权重 | 正常现象，后续会快；可提前 `ollama run qwen2.5vl:7b` 预热 |
+| 首张图 OCR 极慢 | 视觉模型首次加载权重 | 正常现象；开 `warmup: true` + `keep_alive: "30m"` 后模型常驻显存，后续不再反复冷启动（未开时常约 37 秒）；也可提前 `ollama run qwen2.5vl:7b` 预热 |
+| OCR 持续偏慢（20s+/张） | `num_ctx` 过大导致 KV cache 挤占显存、触发 CPU offload | 调小 `num_ctx`（如 8192）；`ollama ps` 看 CPU/GPU 占比，若 CPU 偏高即已 offload |
 | 显存不足 / Ollama 崩溃 | 并发 OCR 太多，或 7B 视觉模型太大 | 把 `max_concurrency` 调为 `1`；或换 `qwen2.5vl:3b` |
-| 记录 `status=error`、`ocr_md` 为空 | 图片抓取成功但模型调用异常 | 看日志里的 OCR 异常栈；记录已保留 `image_url`，修好后可重跑 |
-| 图片抓取失败（日志「图片获取失败」） | NapCat 缓存已清 且 图片 url 过期 | 确认 NapCat 在线；及时处理，QQ 图片 url 有有效期 |
-| 群消息延迟变高 | OCR 占满并发 | 调低 `max_concurrency`、调高 `throttle_seconds` |
+| 记录 `status=error`、`ocr_md` 为空 | 图片抓取成功但模型调用异常 | 看日志里的 OCR 异常栈；记录已保留 `local_path` 与 `image_url`，修好后可重跑（已重试 `retry_max` 次） |
+| 图片抓取失败（日志「图片获取失败」） | NapCat 缓存已清 且 图片 url 过期 | 确认 NapCat 在线；及时处理，QQ 图片 url 有有效期；url 中的 `&amp;` 会被自动还原后兜底下载 |
+| 群消息延迟变高 | OCR worker 占满或三路抢 GPU | 调低 `image.max_concurrency`；文本/图片/对话已共用全局 GPU 锁 `inference_lock`，彼此本就互斥，不会真正并发打爆 Ollama |
+| 重启后部分图没 OCR | 期望行为是自动续跑 | 检查 `lecture_notes` 是否有 `status=pending` 记录；`_resume_pending_ocr` 会在启动时把它们重新入队 |
 
 ---
 

@@ -28,7 +28,9 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 | **QQ 作业扫描器** | 作为主程序的**同进程后台服务**运行（单一入口统一启停）；OneBot 11（NapCat）接入；关键词预过滤 + 大模型结构化抽取；**漏报兜底**避免真作业被静默丢弃 |
 | **私聊确认状态机** | 识别到作业后向主号私聊，支持 `y / n / 改 <时间>` 指令；超时自动忽略 |
 | **作业结果落库** | 识别结果与决策状态写入 `homework_items` 表（`pending / confirmed / auto / ignored / timeout`）；**重启不丢、可历史回看**，待确认项在重启后自动恢复 |
-| **群图片 OCR 存档** | **独立的图片白名单群**：群内图片经 OneBot 抓取后调用本地视觉模型 `qwen2.5vl` 转 Markdown，存入 `lecture_notes` 表（按 `message_id + 图片序号` 去重、带节流与并发上限） |
+| **群图片 OCR 存档** | **独立的图片白名单群**：群内图片经 OneBot 抓取后落盘，先写库 `status=pending` 再交给后台 OCR 队列（worker 串行慢慢解析），存入 `lecture_notes` 表（按 `message_id + 图片序号` 去重）；**进程被杀 / OCR 失败 / 重启都不丢图**，pending 项重启后自动续跑 |
+| **历史补抓（catchup）** | NapCat 是纯 push 模式，进程离线时段不重放；启动时按 `group_progress` 断点（`last_time` + `last_message_id`）调用 OneBot `get_group_msg_history` 把空窗期补回，正序重放复用同一条 `_on_event` 链路（断点 `MAX()` 单调递增，二次补抓不重复入队） |
+| **GPU 单卡推理互斥** | 文本识别（`qwen2.5:7b`）、图片 OCR（`qwen2.5vl:7b`）、主系统对话（`qwen2.5:7b`）三路共用一把全局锁 `core/ollama_gpu.inference_lock`，同一时刻只有一次 Ollama 推理在跑 —— 单张 8GB 卡不再被两模型并发争抢、反复 swap |
 | **Web 多页展示** | Streamlit 四页签：AI 对话 / 手动添加 / 🤖 QQ作业（**直读 db 权威列表** + 实时推送流）/ 🖼️ 讲座通知（渲染 OCR Markdown） |
 | **常驻调度器** | `planme_guardian.py` 单进程守护，按设定时间自动拉起 Ollama + NapCat + 主系统（扫描器随主系统一并启动）并定时清理 |
 
@@ -48,16 +50,27 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 [ 主系统 main.py ]  FastAPI :8000       [ homework 扫描器 ]
   路由集中注册于 api/__init__             主程序同进程后台任务
         │                                    │
-        │                          ┌─────────┴─────────┐
-        │                          ▼                   ▼
-        │                  文本管道                图片管道
-        │                  关键词预过滤            CQ 码解析
-        │                  Ollama 抽取             OneBot 取图
-        │                  置信度决策              qwen2.5vl OCR
-        │                          │                   │
-        │        POST /api/chat ◄──┤ 私聊确认           │
-        ▼                          ▼                   ▼
-[ 输出层 ]                    homework_items      lecture_notes
+        │          ┌───────────────┴───────────────┐
+        │          ▼                               ▼
+        │   文本管道                          图片管道
+        │   关键词预过滤                    CQ 码解析 → 落盘
+        │   Ollama 抽取                     写库 status=pending
+        │   置信度决策                     入 OCR 队列 → worker
+        │        │                          qwen2.5vl OCR
+        │        │                               │
+        │        │  POST /api/chat ◄──┐ 私聊确认 │
+        ▼        ▼                    ▼         ▼
+[ 输出层 ]   homework_items        lecture_notes
+                                          (pending/active/error)
+
+  WS 连上后(on_ready) ──► 历史补抓 get_group_msg_history
+                          按 group_progress 断点补回空窗期，正序重放
+
+  ┌─────────────────────────────────────────────────────┐
+  │ 全局 GPU 推理锁 inference_lock（core/ollama_gpu.py）   │
+  │ 文本检测 / 图片 OCR / 主系统 /api/chat 共用一把锁      │
+  │ ⇒ 同一时刻仅一次 Ollama 推理，单卡不再并发 swap        │
+  └─────────────────────────────────────────────────────┘
   Ollama Tool Calling              └────────┬──────────┘
         ▼                                   ▼
   iCloudCalendarManager            SQLite (WAL, qq_homework.db)
@@ -86,6 +99,8 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 - **本地大模型**：Ollama
   - 文本理解 / 作业抽取：`qwen2.5:7b-instruct-q4_K_M`
   - 图片 OCR（视觉）：`qwen2.5vl:7b`（通过 `chat(model=..., messages=[{..., "images": [path]}])` 调用）
+  - 调用调优：`keep_alive="30m"`（模型常驻显存，根治反复冷启动）、`num_ctx=8192`（压 KV cache 防 CPU offload）、`num_predict=2048`、`Client(timeout=300)`；启动时 `warmup()` 预热
+  - **GPU 单卡互斥**：`core/ollama_gpu.inference_lock` 全局 `asyncio.Lock()`，三路推理共用，保证同一时刻仅一次调用（单卡只装得下一个模型）
 - **日历同步**：`caldav`（iCloud CalDAV 协议）
 - **前端**：Streamlit
 - **QQ 接入**：OneBot 11（NapCat），`websockets` 客户端
@@ -106,7 +121,7 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 ### 5.2 获取代码与安装依赖
 
 ```bash
-git clone https://github.com/<你的用户名>/PlanMe.git
+git clone https://github.com/LiShenliangNju/PlanMe.git
 cd PlanMe
 pip install -r requirements.txt
 ```
@@ -185,13 +200,22 @@ ENABLE_HOMEWORK=false python main.py
 image:
   group_whitelist: [123456789]   # 留空 [] = 关闭图片抓取
   model: "qwen2.5vl:7b"
-  throttle_seconds: 3            # 两次 OCR 最小间隔
-  max_concurrency: 2             # 并发 OCR 上限（显存紧张调小）
+  max_concurrency: 1             # OCR worker 数（= 并发上限；显存紧张保持 1）
+  throttle_seconds: 0            # 0 = 不额外空等，串行完全由 max_concurrency 保证
+  keep_alive: "30m"              # 模型常驻显存，避免每张图重新加载权重（治冷启动卡顿）
+  num_ctx: 8192                  # 上下文长度，过大易触发 CPU offload 拖慢速度
+  num_predict: 2048              # 单张图最大输出 token
+  request_timeout: 300           # 单次 OCR 超时（秒）
+  warmup: true                   # 启动时预热模型，第一张图不等冷启动
+  retry_max: 2                   # 单图最大重试次数，超过标记 error
+  image_dir: "data/lecture_images"  # 图片落盘目录（重启续跑依赖它）
 ```
 
-3. 重启主系统即可。白名单群里**任何人**发的图片都会被抓取 → OCR → 存入 `lecture_notes` 表，在 Web 的「🖼️ 讲座/通知」页按时间倒序渲染。
+3. 重启主系统即可。白名单群里**任何人**发的图片都会被抓取 → **落盘 + 写库（status=pending）→ 后台 worker 排队 OCR** → 存入 `lecture_notes` 表，在 Web 的「🖼️ 讲座/通知」页按时间倒序渲染。此「先落库后 OCR」模式保证：**进程被杀、OCR 中途失败、重启都不丢图**，pending 项会在下次启动时自动续跑。
 
 > 与作业扫描的区别：作业管道只认**老师身份的文本消息**；图片管道不限身份，只看群号是否在 `image.group_whitelist` 里。两者互不影响。
+>
+> ⚠️ **GPU 共享锁**：文本识别、图片 OCR、主系统对话三路共用一把全局推理锁（`core/ollama_gpu.py`），同一时刻只有一次 Ollama 推理在跑。若你的 GPU 单卡装不下两个 7B 模型同跑，这是必要的互斥保护；彻底消除模型切换代价可把文本识别也改用 `qwen2.5vl:7b`（单模型方案，见下文 5.11）。
 
 ### 5.9 常驻调度器（可选，Windows）
 
@@ -204,8 +228,55 @@ guardian.bat status     # 查看是否运行 / 下次触发时间
 guardian.bat test       # 自检路径与端口，不启动任何服务
 ```
 
----
+### 5.10 验证
 
+项目在 `test/` 下提供若干可独立运行的验证脚本（`python test/xxx.py`）：
+
+| 脚本 | 验证内容 | 前置 |
+| --- | --- | --- |
+| `test/ollama_server.py` | Ollama 服务连通性与 `generate` 调用 | 已启动 Ollama |
+| `test/icloud_server.py` | iCloud / CalDAV 连接与 Event/Todo 创建 | 已配置 `.config/caldav/calendar.conf` |
+| `test/tool_call.py` | Ollama Tool Calling 示例 | 已启动 Ollama |
+| `test/qwenvl_ocr.py` | **qwen2.5vl 视觉模型 OCR 端到端**（图片→Markdown） | 已 `ollama pull qwen2.5vl:7b`；可选 Pillow |
+| `test/queue_catchup_check.py` | **离线自检**：幂等迁移补列、断点单调递增、消息去重、OCR 队列状态机、消息归一化、CQ 反转义、补抓分页/断点过滤/正序重放/去重、图片留痕、GPU 共享锁互斥（共 28 项） | 无（纯逻辑，不依赖 Ollama） |
+
+视觉 OCR 测试用法：
+
+```bash
+# 无参：自动用 Pillow 生成一张带文字的测试图
+python test/qwenvl_ocr.py
+# 或对指定图片做 OCR
+python test/qwenvl_ocr.py "D:/xxx/讲座通知.png"
+# 模型 / 地址可环境变量覆盖
+MODEL=qwen2.5vl:7b OLLAMA_HOST=http://localhost:11434 python test/qwenvl_ocr.py
+```
+
+> 该测试会先探活 Ollama 并确认 `qwen2.5vl:7b` 已拉取，再调用 `core/homework/ocr.ImageOCR` 打印 Markdown 结果；输出非空即视为通过。
+
+### 5.11 历史补抓（catchup）与离线窗口
+
+NapCat 是**纯 push 模式**：只在 WebSocket 连接期间把新群消息推过来，进程没跑的时段（比如 guardian 定时窗口之外）**不会重放**，那些消息会永久丢失。为此扫描器在 **WS 连上后（`on_ready`）** 按各群断点补抓：
+
+- 断点存于 `group_progress` 表：`last_time`（处理到的时间戳）+ `last_message_id`（消息锚点），写入用 `MAX()` 保证**单调递增**，补抓重放老消息不会把锚点拽回去。
+- 启动时调用 OneBot `get_group_msg_history` 分页拉取断点之后的历史，按时间自排序、断点过滤、**正序重放**复用同一条 `_on_event` 链路（`_history_to_event`），去重完全交给主键 / `UNIQUE(message_id, image_seq)`。
+- 补抓重放会触发 notifier 私聊确认 —— 一次补出多条作业就会连发多条私聊，属预期行为。
+
+在 `.config/hmwk_scnr/config.yaml` 的 `catchup:` 段调整：
+
+```yaml
+catchup:
+  enabled: true              # 关闭则启动时不再补抓
+  page_size: 50              # 每次 get_group_msg_history 拉取的条数
+  max_pages: 5               # 单群最多翻页数（page_size × max_pages = 250 条上限）
+  max_messages_per_group: 200
+  max_age_hours: 72          # 只补最近 72 小时内的消息
+  min_interval_seconds: 300  # 重连风暴防护：两次补抓最小间隔
+  include_all_groups: false  # false=仅白名单+有断点群；true=所有已加入群（历史量大慎用）
+```
+
+> 局限：单群单次补抓上限约 250 条（`page_size × max_pages`）。若某群在离线窗口内消息量超过该上限，最老的消息仍可能漏抓；要消除可调大 `max_pages` 或改游标抓取。
+
+---
 ## 六、📁 目录结构
 
 ```
@@ -232,15 +303,16 @@ PlanMe/
 │   └── napcat.py               # /api/napcat/* 连接状态与推送流
 ├── core/
 │   ├── __init__.py
-│   ├── llm_agent.py            # PlanmeAgent：Ollama 对话 + Tool Calling
+│   ├── ollama_gpu.py           # ★ 单卡 GPU 全局推理锁 inference_lock（三路 Ollama 调用共用）
+│   ├── llm_agent.py            # PlanmeAgent：Ollama 对话 + Tool Calling（async，调用前 await 共享锁）
 │   ├── calendar_sync.py        # iCloudCalendarManager：CalDAV 写入（Event/Todo 路由）
 │   ├── homework/               # QQ 群作业扫描器 + 图片 OCR（主程序同进程后台服务）
 │       ├── __init__.py         # 导出 HomeworkScanner
-│       ├── scanner.py          # HomeworkScanner 服务类（配置加载、连接 NapCat、文本/图片双管道路由）
-│       ├── detector.py         # 关键词预过滤 + Ollama 结构化抽取（含漏报兜底）
-│       ├── ocr.py              # ★ ImageOCR：qwen2.5vl 视觉模型把图片转 Markdown（带节流）
-│       ├── onebot_client.py    # OneBot 11（NapCat）WS 客户端，含 get_image / 图片下载兜底
-│       ├── message_store.py    # SQLite 存储层（4 张表 + WAL + 去重 + 状态更新）
+│       ├── scanner.py          # HomeworkScanner 服务类：双管道路由 + 落库 OCR 队列 + 历史补抓
+│       ├── detector.py         # 关键词预过滤 + Ollama 结构化抽取（含漏报兜底，调用前 await 共享锁）
+│       ├── ocr.py              # ★ ImageOCR：qwen2.5vl 视觉模型转 Markdown；keep_alive/num_ctx/warmup + 队列消费（await 共享锁）
+│       ├── onebot_client.py    # OneBot 11（NapCat）WS 客户端：get_image / 图片下载兜底 / get_group_msg_history / on_ready 钩子
+│       ├── message_store.py    # SQLite 存储层（4 张表 + WAL + 幂等迁移 + 去重 + OCR 队列状态机 + 补抓锚点）
 │       ├── scheduler_bridge.py # 把作业 POST 给主系统 /api/chat
 │       └── notifier.py         # 私聊确认状态机（y / n / 改），写状态到 db，并向 feed 发布事件
 │   └── napcat/                 # ★ NapCat 集成层
@@ -249,13 +321,16 @@ PlanMe/
 ├── schemas/
 │   ├── schedule_schema.py      # CalendarItemSchema（日程 / 待办结构化规范）
 │   └── homework_schema.py      # Sender / GroupMessage / HomeworkExtraction / ReminderPayload
-│                               #   + HomeworkItem（落库的作业与状态）+ LectureNote（OCR 存档）
+│                               #   + HomeworkItem（落库的作业与状态）+ LectureNote（OCR 存档，含 local_path/attempts/error）
+│                               #   + GroupProgress（补抓锚点：last_time + last_message_id）
 ├── web/
 │   └── app.py                  # Streamlit 前端（4 页签：对话 / 手动 / 🤖QQ作业 / 🖼️讲座通知）
 ├── test/
 │   ├── icloud_server.py        # iCloud / CalDAV 连接测试
 │   ├── ollama_server.py        # Ollama 连接测试
-│   └── tool_call.py            # Tool Calling 调用示例
+│   ├── tool_call.py            # Tool Calling 调用示例
+│   └── qwenvl_ocr.py           # qwen2.5vl 视觉模型 OCR 端到端测试
+│   └── queue_catchup_check.py  # ★ 离线自检 28 项：迁移/断点/去重/队列状态机/补抓/GPU 锁
 └── .config/                    # 本地配置（不进版本库，见 *.example）
     ├── settings.py             # 全局设置（可提交，仅默认值；含 ENABLE_HOMEWORK 开关）
     ├── caldav/calendar.conf    # ⚠️ 含 iCloud 密码，gitignore
@@ -271,12 +346,12 @@ PlanMe/
 | 表 | 作用 | 去重键 |
 | --- | --- | --- |
 | `messages` | 群消息原文，跨重启增量去重 | `message_id`（主键） |
-| `group_progress` | 各群已处理到的时间水位 | `group_id`（主键） |
+| `group_progress` | 各群已处理到的时间水位（**补抓锚点**：`last_time` + `last_message_id`，写入取 `MAX()` 保证单调递增） | `group_id`（主键） |
 | `homework_items` | **作业识别结果 + 决策状态**（Web 权威列表） | `message_id`（UNIQUE） |
-| `lecture_notes` | **图片 OCR 得到的 Markdown 存档** | `(message_id, image_seq)` |
+| `lecture_notes` | **图片 OCR 队列与 Markdown 存档**（先落库 `pending` 再排队 OCR，含 `local_path` / `attempts` / `error`） | `(message_id, image_seq)` |
 
 `homework_items.status` 取值：`pending`（待你私聊确认）、`confirmed`（你确认后已入日历）、`auto`（高置信度自动入）、`ignored`（你回复 n）、`timeout`（超时自动忽略）。
-`lecture_notes.status` 取值：`active`（OCR 成功）、`error`（OCR 失败，可后续重跑）。
+`lecture_notes.status` 取值：`pending`（已落库、等待 OCR）、`active`（OCR 成功）、`error`（OCR 失败，`retry_max` 用尽后标记，可后续重跑）。
 
 > WAL 模式让 API 进程并发读、扫描器持续写互不阻塞，因此 Web 可以随时直读 db。
 
@@ -353,9 +428,15 @@ Two optional QQ pipelines run as in-process background services via **OneBot 11 
 1. **Homework scanner** — detects assignments in whitelisted group chats (keyword prefilter + LLM extraction),
    asks for confirmation over private message (`y` / `n` / reschedule), and writes them to iCloud reminders.
    Every extraction and decision is persisted to SQLite (`homework_items`), so the web list survives restarts.
-2. **Image OCR archive** — for a separate image whitelist, group images are fetched via OneBot and converted to
-   Markdown by the local vision model **`qwen2.5vl`**, stored in `lecture_notes` and rendered in the web UI.
-   Useful for lecture / announcement posters.
+2. **Image OCR archive** — for a separate image whitelist, group images are fetched via OneBot, persisted to disk,
+   written to `lecture_notes` as `pending`, then OCR'd by the local vision model **`qwen2.5vl`** in a background
+   queue (so a kill / restart never loses an image; pending items resume automatically). Useful for lecture /
+   announcement posters.
+
+Because NapCat is push-only, a **catchup** step replays each group's history since its `group_progress` checkpoint
+on WebSocket connect, so messages during offline windows are not lost. All three Ollama callers (text detection,
+image OCR, main-chat) share one global GPU inference lock (`core/ollama_gpu.py`), so only one inference runs at a
+time on a single 8 GB card.
 
 All inference runs locally; only iCloud sync needs your Apple credentials.
 MIT licensed. See `docs/` for architecture and deployment details.
