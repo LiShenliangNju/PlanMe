@@ -17,6 +17,7 @@ logger = logging.getLogger("notifier")
 @dataclass
 class PendingItem:
     cid: str
+    message_id: int
     extraction: HomeworkExtraction
     group_id: int
     group_name: str
@@ -30,6 +31,11 @@ _CANCEL = ("取消", "否", "no", "n", "忽略", "不要", "不加","不加入",
 _CHANGE = ("改", "改为", "时间", "延期", "推迟","延后", "改期", "换时间")
 
 
+def make_cid(message_id: int) -> str:
+    """稳定的确认编号：基于消息 ID，跨重启不变（避免重启后 cid 错乱）。"""
+    return f"hw{message_id}"
+
+
 class Notifier:
     def __init__(
         self,
@@ -38,20 +44,21 @@ class Notifier:
         bridge: SchedulerBridge,
         confirm_timeout: float,
         feed=None,
+        store=None,
     ) -> None:
         self.onebot = onebot
         self.owner_id = int(owner_id)
         self.bridge = bridge
         self.confirm_timeout = confirm_timeout
         self.feed = feed
-        self._seq = 0
+        self.store = store  # MessageStore（用于把作业决策状态落库）
         self.pending: dict[str, PendingItem] = {}
 
     async def ask(self, msg: GroupMessage, extraction: HomeworkExtraction, group_name: str) -> None:
-        self._seq += 1
-        cid = f"{self._seq:04d}"
+        cid = make_cid(msg.message_id)
         self.pending[cid] = PendingItem(
             cid=cid,
+            message_id=msg.message_id,
             extraction=extraction,
             group_id=msg.group_id,
             group_name=group_name,
@@ -169,6 +176,54 @@ class Notifier:
                 return text.split(kw, 1)[1].strip() or None
         return None
 
+    def _set_status(self, message_id: int, status: str, ex: "HomeworkExtraction | None" = None) -> None:
+        """把作业决策状态写回 db（pending→confirmed/ignored 等）。"""
+        if self.store is None:
+            return
+        decided_at = int(time.time())
+        try:
+            asyncio.get_running_loop().create_task(
+                self.store.update_homework_status(
+                    message_id,
+                    status,
+                    decided_at,
+                    ex.subject if ex else None,
+                    ex.deadline if ex else None,
+                    ex.description if ex else None,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("写回作业状态失败 #%s：%s", message_id, exc)
+
+    async def rehydrate_from_db(self, store) -> None:
+        """进程重启后，把仍为 pending 的作业恢复进内存，使主人仍可确认。"""
+        try:
+            rows = await store.pending_homework_items()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("恢复 pending 作业失败：%s", exc)
+            return
+        for row in rows:
+            mid = row.get("message_id")
+            cid = row.get("cid") or make_cid(mid)
+            ex = HomeworkExtraction(
+                is_homework=True,
+                subject=row.get("subject"),
+                deadline=row.get("deadline"),
+                description=row.get("description"),
+                confidence=row.get("confidence") or 0.0,
+            )
+            self.pending[cid] = PendingItem(
+                cid=cid,
+                message_id=mid,
+                extraction=ex,
+                group_id=row.get("group_id") or 0,
+                group_name=row.get("group_name") or "",
+                raw=row.get("raw_content") or "",
+                created_at=row.get("created_at") or time.time(),
+            )
+        if self.pending:
+            logger.info("已从 db 恢复 %d 条待确认作业", len(self.pending))
+
     async def _confirm(self, item: PendingItem) -> None:
         ex = item.extraction
         title = f"{ex.subject or '作业'}{(' · ' + ex.description) if ex.description else ''}"
@@ -184,6 +239,7 @@ class Notifier:
         await self.onebot.send_private_msg(
             self.owner_id, f"{result}（#{item.cid}）\n{detail}".strip()
         )
+        self._set_status(item.message_id, "confirmed", ex)
         self.pending.pop(item.cid, None)
         if self.feed:
             self.feed.publish(
@@ -195,6 +251,7 @@ class Notifier:
 
     async def _cancel(self, item: PendingItem) -> None:
         await self.onebot.send_private_msg(self.owner_id, f"已忽略（#{item.cid}）")
+        self._set_status(item.message_id, "ignored")
         self.pending.pop(item.cid, None)
         if self.feed:
             self.feed.publish("cancelled", f"已忽略（#{item.cid}）", cid=item.cid)

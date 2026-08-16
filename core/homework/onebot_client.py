@@ -12,6 +12,9 @@ OneBot 11 协议说明（与 OneBot 12 不同，无 opcode、无客户端心跳�
 import asyncio
 import json
 import logging
+import os
+import tempfile
+import urllib.request
 from typing import Any, Awaitable, Callable, Optional
 
 import websockets
@@ -113,6 +116,48 @@ class OneBotClient:
         return await self.send_action(
             "send_private_msg", {"user_id": int(user_id), "message": text}
         )
+
+    # ------------------------------------------------------------------
+    # 图片下载：NapCat 收到群图片后会在本地缓存。优先用 OneBot 标准
+    # `get_image` 拿本地缓存路径；失败再用图片 url 直接 HTTP 下载到临时文件。
+    # 返回本地图片路径（供 Ollama 视觉模型做 OCR）。拿不到返回 None。
+    # ------------------------------------------------------------------
+    async def get_image(self, file_id: str) -> Optional[str]:
+        """通过 OneBot get_image 取 NapCat 本地缓存文件绝对路径。"""
+        try:
+            data = await self.send_action("get_image", {"file": file_id})
+            path = (data or {}).get("file")
+            if path and os.path.isfile(path):
+                return path
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("get_image 失败（%s）：%s", file_id, exc)
+        return None
+
+    async def download_image_url(self, url: str) -> Optional[str]:
+        """把图片 url 下载到临时文件，返回本地路径。"""
+        if not url:
+            return None
+        try:
+            suffix = os.path.splitext(url.split("?")[0])[1] or ".png"
+            fd, path = tempfile.mkstemp(suffix=suffix, prefix="planme_img_")
+            os.close(fd)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: urllib.request.urlretrieve(url, path),  # noqa: S310
+            )
+            if os.path.isfile(path):
+                return path
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("下载图片失败（%s）：%s", url, exc)
+        return None
+
+    async def fetch_image_path(self, file_id: str, url: str) -> Optional[str]:
+        """综合获取图片本地路径：先 get_image 缓存，再 url 兜底。"""
+        path = await self.get_image(file_id)
+        if path:
+            return path
+        return await self.download_image_url(url)
 
     def stop(self) -> None:
         self._stop = True

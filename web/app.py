@@ -32,8 +32,8 @@ with st.sidebar:
     st.code("提醒我下周五18:00前提交行策期末报告", language=None)
     st.code("今晚8点和李总在腾讯会议线上开会，链接是 https://meeting.tencent.com/ilovesleep", language=None)
 
-# 选项卡划分为：AI 智能对话 和 手动精准添加
-tab1, tab2, tab3 = st.tabs(["💬 AI 智能对话", "📝 手动快捷添加", "🤖 QQ作业"])
+# 选项卡划分为：AI 智能对话、手动精准添加、QQ作业、讲座/通知
+tab1, tab2, tab3, tab4 = st.tabs(["💬 AI 智能对话", "📝 手动快捷添加", "🤖 QQ作业", "🖼️ 讲座/通知"])
 
 # ---------------------------------------------------------
 # Tab 1: AI 智能对话
@@ -153,33 +153,41 @@ with tab2:
                     st.error(f"无法连接到后端服务器: {e}")
 
 # ---------------------------------------------------------
-# Tab 3: QQ 作业（napcat 窗口：qqbot 推送 + 建议添加的日程）
+# Tab 3: QQ 作业（权威列表直接读 db 的 homework_items；下方保留 qqbot 推送流）
 # ---------------------------------------------------------
 with tab3:
-    st.subheader("🤖 QQ 作业 · qqbot 推送与建议日程")
-    if st.button("🔄 刷新"):
+    st.subheader("🤖 QQ 作业 · 落库列表 & qqbot 推送")
+    if st.button("🔄 刷新", key="hw_refresh"):
         st.rerun()
 
-    # 待确认作业（notifier 内存状态，经 /api/homework/pending 暴露）
+    # 权威作业列表：直接读 db（重启不丢、可历史回看、按状态筛选）
     try:
-        pend = requests.get(f"{API_BASE_URL}/homework/pending", timeout=3).json().get("pending", [])
+        items = requests.get(f"{API_BASE_URL}/homework/items", timeout=5).json().get("items", [])
     except Exception:
-        pend = []
-    if pend:
-        st.markdown(f"**⏳ 待确认（{len(pend)}）**")
-        for it in pend:
-            st.info(
-                f"**#{it['cid']} {it['subject'] or '未识别'}**\n\n"
-                f"- 🕒 截止: `{it['deadline'] or '未识别'}`\n"
-                f"- 🏫 群: {it['group_name']}\n"
-                f"- 🎯 置信度: {it['confidence']:.2f}"
-            )
-    else:
-        st.caption("暂无待确认作业")
+        items = []
+    st.markdown(f"**📋 作业列表（db，{len(items)}）**")
+    if not items:
+        st.caption("暂无作业记录")
+    for it in items:
+        status = it.get("status", "")
+        subj = it.get("subject") or "未识别"
+        dl = it.get("deadline") or "未识别"
+        grp = it.get("group_name") or it.get("group_id")
+        conf = it.get("confidence") or 0
+        conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else str(conf)
+        head = f"#{it.get('cid','')} {subj} · 截止 {dl} · 群 {grp} · 置信 {conf_s}"
+        if status in ("confirmed", "auto"):
+            st.success(f"✅ {'自动加入' if status == 'auto' else '已确认加入'} | {head}")
+        elif status == "pending":
+            st.warning(f"⏳ 待确认 | {head}")
+        elif status == "ignored":
+            st.caption(f"🚫 已忽略 | {head}")
+        else:
+            st.info(f"⚪ 已过滤(非作业/低置信) | {head}")
 
     st.divider()
 
-    # qqbot 推送 / 建议日程流（经 /api/napcat/pushes 暴露）
+    # qqbot 推送 / 建议日程流（内存 feed，保留作实时流水）
     try:
         pushes = requests.get(f"{API_BASE_URL}/napcat/pushes", timeout=3).json().get("pushes", [])
     except Exception:
@@ -192,3 +200,28 @@ with tab3:
             st.write(ev.get("text", ""))
     else:
         st.caption("暂无推送记录")
+
+# ---------------------------------------------------------
+# Tab 4: 讲座/通知（白名单群图片 OCR 存档，直接读 db 的 lecture_notes）
+# ---------------------------------------------------------
+with tab4:
+    st.subheader("🖼️ 讲座 / 通知 · 图片 OCR 存档")
+    if st.button("🔄 刷新", key="lecture_refresh"):
+        st.rerun()
+    try:
+        notes = requests.get(f"{API_BASE_URL}/lecture/notes", timeout=5).json().get("notes", [])
+    except Exception:
+        notes = []
+    st.markdown(f"**📚 笔记（db，{len(notes)}）**")
+    if not notes:
+        st.caption("白名单群里还没有抓到图片，或 image.group_whitelist 未配置")
+    for n in notes:
+        ts = datetime.fromtimestamp(n.get("created_at", 0)).strftime("%Y-%m-%d %H:%M")
+        grp = n.get("group_name") or n.get("group_id")
+        status = n.get("status")
+        icon = "✅" if status == "active" else "⚠️"
+        with st.expander(f"📄 {grp} · {ts} · {icon}"):
+            if n.get("image_url"):
+                st.markdown(f"[🔗 原图链接]({n['image_url']})")
+            md = n.get("ocr_md") or "（OCR 未返回内容）"
+            st.markdown(md)
