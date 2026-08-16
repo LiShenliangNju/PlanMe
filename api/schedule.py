@@ -48,10 +48,9 @@ async def handle_chat(request: ChatRequest):
                 message=sync_result,
                 data=item_schema
             )
-            
+
         # 情况 C: 模型输出了非 text 与 tool_call 的异常情况（防止幻觉）
         else:
-            # 记录日志，并向客户端返回明确的错误
             print(f"Warning: Unexpected AI result type: {result_type}")
             raise HTTPException(status_code=500, detail="模型返回了未知的指令类型，请重试。")
 

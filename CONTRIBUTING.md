@@ -57,8 +57,8 @@ cp .config/caldav/calendar.conf.example .config/caldav/calendar.conf
 ## 五、Pull Request 要求
 
 1. PR 描述请说明：改动动机、主要变更、测试方式。
-2. 确保本地可正常启动主系统（`python main.py`）与（如涉及）扫描器（`python -m core.homework`）。
-3. 如改动 API 契约（`api/routes.py`、`schemas/`），请在 PR 中说明前后兼容性影响。
+2. 确保本地可正常启动主系统（`python main.py`）。homework 扫描器等后台服务已由主程序单一入口统一拉起（受 `ENABLE_HOMEWORK` 控制），无需单独启动。
+3. 如改动 API 契约（`api/schedule.py`、`api/homework.py`、`api/napcat.py`、`schemas/`），请在 PR 中说明前后兼容性影响。
 4. 新增依赖请同步更新 `requirements.txt` 并注明用途。
 
 ---

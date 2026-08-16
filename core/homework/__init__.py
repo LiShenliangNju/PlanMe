@@ -1,5 +1,8 @@
-"""QQ 群作业扫描子模块。
+"""QQ 群作业扫描子模块（作为主程序同进程后台服务运行）。
 
-作为独立进程运行：`python -m core.homework`（依赖 NapCat + Ollama）。
-识别老师发布的作业 -> 私聊主号确认 -> 经 HTTP 调用主系统 /api/chat 写入日程。
+HomeworkScanner 由 app 的 lifespan 启动 / 停止；扫描器只把作业转自然语言 POST 给主系统，
+不自己写 iCloud。私聊确认状态机与 qqbot 推送通过 core.napcat.feed 暴露给 API / Web。
 """
+from .scanner import HomeworkScanner
+
+__all__ = ["HomeworkScanner"]

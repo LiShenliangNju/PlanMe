@@ -24,35 +24,33 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 | **双日历路由** | `Event` → 写入 iCloud「日程」日历；`Todo` → 写入 iCloud「提醒」日历（可按类型自动匹配） |
 | **Web 界面** | Streamlit 双页签：AI 智能对话 + 手动快捷添加，实时展示系统健康状态 |
 | **HTTP API** | `POST /api/chat`（自然语言）、`POST /api/manual-item`（绕过 AI）、`GET /api/health`（健康检查） |
-| **QQ 作业扫描器** | OneBot 11（NapCat）接入；关键词预过滤 + 大模型结构化抽取；**漏报兜底**避免真作业被静默丢弃 |
+| **QQ 作业扫描器** | 作为主程序的**同进程后台服务**运行（单一入口统一启停）；OneBot 11（NapCat）接入；关键词预过滤 + 大模型结构化抽取；**漏报兜底**避免真作业被静默丢弃 |
 | **私聊确认状态机** | 识别到作业后向主号私聊，支持 `y / n / 改 <时间>` 指令；超时自动忽略 |
-| **常驻调度器** | `planme_guardian.py` 单进程守护，按设定时间自动拉起 Ollama + NapCat + 扫描器并定时清理 |
+| **QQ 作业 Web 窗口** | Streamlit 新增「🤖 QQ作业」页，只读展示 qqbot 推送与待确认 / 已添加的建议日程（数据来自 `/api/homework`、`/api/napcat`） |
+| **常驻调度器** | `planme_guardian.py` 单进程守护，按设定时间自动拉起 Ollama + NapCat + 主系统（扫描器随主系统一并启动）并定时清理 |
 
 ---
 
 ## 三、🧱 系统架构
 
-系统由 **主系统（FastAPI）** 与 **QQ 作业扫描器（独立进程）** 两部分组成：
+系统以 **单一入口 `main.py`** 启动 FastAPI 主系统，并在同一进程内按配置拉起可插拔的后台服务（如 homework 扫描器）。所有路由统一注册到 `api`，所有服务由 `app` 编排启停：
 
 ```
                     ┌─────────────── 用户 / QQ 群 ───────────────┐
                     │                                            │
-  自然语言 ──►  Streamlit Web UI ──►  FastAPI 主系统 (8000)
-                    │                       │
-                    │                  Ollama 本地模型
-                    │                       │  Tool Calling
-                    │                       ▼
-                    │               iCloudCalendarManager
-                    │                       │
-                    │                  iCloud CalDAV
+  自然语言 ──►  Streamlit Web UI ──►  FastAPI 主系统 (8000)  ◄──┐
+              (含 🤖QQ作业 窗口)      │      ▲ 所有路由经 api/__init__ 集中注册
+                    │                  │ Ollama / Tool Calling    │ /api/homework、/api/napcat
+                    │                  ▼                          │ 暴露扫描器状态与推送
+                    │         iCloudCalendarManager ──► iCloud CalDAV
                     │
-  QQ 群消息 ──►  NapCat (OneBot WS) ──►  扫描器进程 (core/homework)
-                                            │ Ollama 抽取
-                                            │ 私聊确认
+  QQ 群消息 ──►  NapCat (OneBot WS) ──►  homework 扫描器（主程序同进程后台任务）
+                                            │ Ollama 抽取 / 私聊确认
                                             └──► POST /api/chat ──► 主系统
+                                            └──► 推送事件写入 core.napcat.feed（供 Web 窗口消费）
 ```
 
-扫描器与主系统通过 HTTP（`/api/chat`）解耦协作，扫描器本身**不做**日历写入，只把识别出的作业转成自然语言交给主系统处理。
+扫描器与主系统**同进程**运行（共享内存状态，Web 窗口可直接读取待确认项与推送流），但仍**不做**日历写入，只把识别出的作业转成自然语言交给主系统处理。
 
 ---
 
@@ -129,15 +127,19 @@ streamlit run web/app.py
 
 ### 5.7 启用 QQ 作业扫描器（可选）
 
+QQ 作业扫描器已并入主程序**单一入口**：启动 `main.py` 时会按 `ENABLE_HOMEWORK`（默认 `true`，可在 `.env` 覆盖）自动作为同进程后台任务拉起，无需再单独运行。
+
 1. 按 `docs/DEPLOYMENT.md` 配置并启动 NapCat（小号登录、正向 WS 监听 `127.0.0.1:3001`）；
 2. 填写 `.config/hmwk_scnr/config.yaml`；
-3. 启动扫描器：
+3. 正常启动主系统即可（`python main.py`），扫描器随之运行：
 
 ```bash
-python -m core.homework
+python main.py
+# 可选：临时关闭扫描器
+ENABLE_HOMEWORK=false python main.py
 ```
 
-识别到作业后，主号会收到私聊确认；回复 `y` 加入、`n` 忽略、`改 <时间>` 改期。
+识别到作业后，主号会收到私聊确认；回复 `y` 加入、`n` 忽略、`改 <时间>` 改期。同时，Web 界面（streamlit）的「🤖 QQ作业」页会实时展示 qqbot 推送与待确认 / 已添加的建议日程。
 
 ### 5.8 常驻调度器（可选，Windows）
 
@@ -156,8 +158,8 @@ guardian.bat test       # 自检路径与端口，不启动任何服务
 
 ```
 PlanMe/
-├── main.py                      # FastAPI 入口，启动 8000 端口
-├── planme_guardian.py           # 常驻调度器（守护进程）
+├── main.py                      # 唯一启动入口：create_app() + 后台服务编排 + uvicorn
+├── planme_guardian.py           # 常驻调度器（守护进程，仅拉起 main.py 单一入口）
 ├── guardian.bat                # Windows 启动器（纯 ASCII，GBK 安全）
 ├── requirements.txt            # 统一依赖清单
 ├── .env.example                # 环境变量模板（真实 .env 请勿提交）
@@ -166,30 +168,41 @@ PlanMe/
 ├── docs/
 │   ├── ARCHITECTURE.md         # 详细架构与数据流说明
 │   └── DEPLOYMENT.md           # 部署、NapCat 对接、排障
+├── app/
+│   ├── __init__.py             # 集中把 .config 注入 sys.path
+│   ├── factory.py              # create_app()：CORS + 集中注册路由 + 后台服务启停
+│   └── services.py             # ServiceManager：后台服务注册表（start/stop 扩展点）
 ├── api/
-│   └── routes.py               # FastAPI 路由：/api/chat、/api/manual-item、/api/health
+│   ├── __init__.py             # register_routers(app)：统一挂载各模块 router
+│   ├── schedule.py             # 原计划 routes.py：/api/chat、/api/manual-item、/api/health
+│   ├── homework.py             # /api/homework/* 状态/待确认/推送（Web 窗口数据源）
+│   └── napcat.py               # /api/napcat/* 连接状态与推送流
 ├── core/
 │   ├── __init__.py
 │   ├── llm_agent.py            # PlanmeAgent：Ollama 对话 + Tool Calling
 │   ├── calendar_sync.py        # iCloudCalendarManager：CalDAV 写入（Event/Todo 路由）
-│   └── homework/               # QQ 群作业扫描器（独立进程，python -m core.homework）
-│       ├── __main__.py         # 入口：加载配置、连接 NapCat、路由消息
+│   ├── homework/               # QQ 群作业扫描器（主程序同进程后台服务）
+│       ├── __init__.py         # 导出 HomeworkScanner
+│       ├── scanner.py           # HomeworkScanner 服务类（加载配置、连接 NapCat、路由消息）
 │       ├── detector.py         # 关键词预过滤 + Ollama 结构化抽取（含漏报兜底）
 │       ├── onebot_client.py    # OneBot 11（NapCat）WebSocket 客户端
 │       ├── message_store.py    # SQLite 增量去重存储
 │       ├── scheduler_bridge.py # 把作业 POST 给主系统 /api/chat
-│       └── notifier.py         # 私聊确认状态机（y / n / 改）
+│       └── notifier.py         # 私聊确认状态机（y / n / 改），并向 feed 发布事件
+│   └── napcat/                 # ★ NapCat 集成层
+│       ├── __init__.py
+│       └── feed.py             # FeedBus 事件总线：qqbot 推送 + 建议日程，供 API/Web 消费
 ├── schemas/
 │   ├── schedule_schema.py      # CalendarItemSchema（日程 / 待办结构化规范）
 │   └── homework_schema.py      # 作业相关 Schema（Sender / GroupMessage / HomeworkExtraction / ReminderPayload）
 ├── web/
-│   └── app.py                  # Streamlit 前端界面
+│   └── app.py                  # Streamlit 前端界面（含 🤖QQ作业 窗口）
 ├── test/
 │   ├── icloud_server.py        # iCloud / CalDAV 连接测试
 │   ├── ollama_server.py        # Ollama 连接测试
 │   └── tool_call.py            # Tool Calling 调用示例
 └── .config/                    # 本地配置（不进版本库，见 *.example）
-    ├── settings.py             # 全局设置（可提交，仅默认值）
+    ├── settings.py             # 全局设置（可提交，仅默认值；含 ENABLE_HOMEWORK 开关）
     ├── caldav/calendar.conf    # ⚠️ 含 iCloud 密码，gitignore
     └── hmwk_scnr/config.yaml   # ⚠️ 含 token / QQ 号，gitignore
 ```

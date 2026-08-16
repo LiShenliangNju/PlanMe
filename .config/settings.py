@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     HMWK_SCRN_CONFIG_PATH: str = str(BASE_DIR / ".config" / "hmwk_scnr" / "config.yaml")
     HMWK_DETECTOR_TEMPERATURE: float = 0.0
 
+    # 是否随主程序单一入口启动 homework 扫描器后台任务（默认开启）
+    ENABLE_HOMEWORK: bool = True
+
     OLLAMA_HOST: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b-instruct-q4_K_M"
 

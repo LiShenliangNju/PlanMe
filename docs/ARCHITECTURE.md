@@ -6,30 +6,31 @@
 
 ## 一、总体划分
 
-PlanMe 由两个**解耦**的部分组成：
+PlanMe 由**主系统（FastAPI）** 与**可插拔的后台服务**（如 homework 扫描器）组成，统一经**单一入口 `main.py`** 启动；所有路由集中注册到 `api`，所有服务由 `app` 编排启停。
 
 | 部件 | 进程 | 入口 | 职责 |
 | --- | --- | --- | --- |
-| **主系统** | FastAPI (`uvicorn`, 8000) | `main.py` | 理解自然语言、调用 Ollama、写入 iCloud |
-| **QQ 作业扫描器** | 独立进程 | `python -m core.homework` | 监听 QQ 群消息、识别作业、私聊确认、转发主系统 |
+| **主系统 + 后台服务** | FastAPI (`uvicorn`, 8000) + 同进程后台任务 | `main.py`（`app.factory.create_app`） | 理解自然语言、调用 Ollama、写入 iCloud；按配置统一拉起 homework 等后台服务 |
+| **QQ 作业扫描器** | 主程序**同进程后台任务** | `core/homework/scanner.py` 的 `HomeworkScanner`（由 `app` 的 `on_event` 启停） | 监听 QQ 群消息、识别作业、私聊确认、转发主系统 |
+| **NapCat 集成层** | 内存事件总线（`core/napcat/feed.py`） | `app` 装配 | 聚合 qqbot 推送 + 建议日程，经 `/api/homework`、`/api/napcat` 暴露给 Web 窗口 |
 
-两者通过 HTTP（`POST /api/chat`）协作，**扫描器不做日历写入**，只把作业转成自然语言交给主系统处理。这样主系统是唯一写入 iCloud 的入口，便于审计与复用。
+三者通过 HTTP（`POST /api/chat`）协作，**扫描器不做日历写入**，只把作业转成自然语言交给主系统处理。这样主系统是唯一写入 iCloud 的入口，便于审计与复用。
 
 ---
 
 ## 二、配置加载链路
 
 ```
-main.py / core/homework/__main__.py
-        │  sys.path.insert(0, "<ROOT>/.config")
+main.py  ──►  app.factory.create_app()
+        │  app/__init__.py 统一把 <ROOT>/.config 注入 sys.path（替代原先散落在各模块的重复 sys.path.insert）
         ▼
 .config/settings.py  ──►  Settings(BaseSettings)
-        │  • 默认值：OLLAMA_HOST / OLLAMA_MODEL / TIMEZONE ...
+        │  • 默认值：OLLAMA_HOST / OLLAMA_MODEL / TIMEZONE / ENABLE_HOMEWORK ...
         │  • env_file = ".env"（可被 .env 覆盖）
         │  • 把 CALDAV_CONFIG_FILE / HMWK_SCRN_CONFIG_FILE 注入 os.environ
         ▼
 caldav.get_calendars() 读取 .config/caldav/calendar.conf
-core/homework/__main__.py 读取 .config/hmwk_scnr/config.yaml
+core/homework/scanner.py 读取 .config/hmwk_scnr/config.yaml
 ```
 
 > `.config/settings.py` 仅含默认值、可安全入库；而 `calendar.conf` / `config.yaml` 含密码与 token，已在 `.gitignore` 排除，请使用对应的 `.example` 模板。
@@ -42,7 +43,7 @@ core/homework/__main__.py 读取 .config/hmwk_scnr/config.yaml
 用户文本
   │
   ▼
-api/routes.py  →  POST /api/chat  {text}
+api/schedule.py  →  POST /api/chat  {text}
   │
   ▼
 core/llm_agent.py  →  PlanmeAgent.process_query()
@@ -83,7 +84,7 @@ QQ 群消息
 core/homework/onebot_client.py  →  OneBotClient（断线自动重连）
   │  on_event() 按 message_type 分发
   ▼
-__main__.handle_group(event)
+HomeworkScanner._handle_group(event)        # 见 core/homework/scanner.py
   ├─ 群白名单过滤（group_whitelist）
   ├─ 发送者身份过滤（teacher_roles / teacher_user_ids）
   ├─ CQ 码剥离（strip_cq）
@@ -113,7 +114,8 @@ core/homework/notifier.py  →  Notifier
 **关键设计点**
 - `message_store` 以 `message_id` 为主键 `INSERT OR IGNORE` 天然去重，避免重复询问 / 重复写入。
 - `OneBotClient` 用 `echo` 关联 API 请求 / 响应，断线后 `run_forever` 自动重连。
-- 扫描器与主系统彻底解耦：即使扫描器崩溃，也不影响主系统；反之同理。
+- 扫描器与主系统同进程运行（共享内存状态），Web 窗口可直接读取 `notifier.pending` 与 `feed`；扫描器崩溃被 `try/except` 隔离，不影响 FastAPI 主系统。
+- **统一装配**：新增后台服务只需在 `app/services.py` 挂一个实例并在 `app/factory.py` 的 `on_event` 中启停；新增 HTTP 接口只需在 `api/__init__.py` 的 `register_routers` 多 `include` 一个 router。
 
 ---
 

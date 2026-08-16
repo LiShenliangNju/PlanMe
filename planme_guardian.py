@@ -4,7 +4,7 @@ planme_guardian.py - Planme 单进程常驻调度器
 ====================================================================
 用「一个」常驻进程替代原本散落在根目录的启动/关闭 bat：
 
-  - 每天 10:00 / 16:00 / 22:00（本地时间）自动拉起 Ollama + NapCat
+  - 每天 12:40 / 22:00（本地时间）自动拉起 Ollama + NapCat
   - NapCat 通过 D:\Tools\NapCatQQ\NapCat.Shell\launcher.bat 启动，
     会弹出独立窗口提示用户扫码登录
   - Ollama 启动后 `ollama` 终端命令即可用
@@ -39,10 +39,10 @@ PYTHON_EXE = r"D:\Tools\Miniforge3\envs\planme\python.exe"        # 运行扫描
 PYTHONW_EXE = r"D:\Tools\Miniforge3\envs\planme\pythonw.exe"       # 常驻自身（无窗口）
 NAPCAT_LAUNCHER = r"D:\Tools\NapCatQQ\NapCat.Shell\launcher.bat"
 
-SCHEDULE = ["10:00", "16:00", "22:00"]   # 本地时间，每天三个时段
+SCHEDULE = ["12:40", "22:00"]            # 本地时间，每天两个时段
 CAPTURE_MIN = 60                         # 每个时段抓取时长（分钟）
 RUN_SCANNER = True                       # 抓取窗口内是否运行 homework 扫描器
-RUN_MAIN_SYSTEM = False                  # 如需把作业真正写入日历，设为 True 并确认下面端口
+RUN_MAIN_SYSTEM = True                  # 如需把作业真正写入日历，设为 True 并确认下面端口
 CLEAN_STALE_NAPCAT = True                # 时段启动前清理占用 3001 的残留 NapCat
 
 OLLAMA_CMD = "ollama"                    # 拉起 ollama serve 的命令
@@ -229,21 +229,9 @@ def start_napcat():
 
 
 def start_scanner():
-    if not RUN_SCANNER:
-        return None
-    log.info("启动 homework 扫描器（抓取消息）…")
-    try:
-        logf = open(SCANNER_LOG, "a", encoding="utf-8")
-        proc = subprocess.Popen(
-            [PYTHON_EXE, "-m", "core.homework"],
-            cwd=str(ROOT),
-            stdout=logf, stderr=logf,
-            creationflags=CREATE_NO_WINDOW,
-        )
-        return proc.pid
-    except Exception as e:  # noqa: BLE001
-        log.warning("启动扫描器失败: %s", e)
-        return None
+    # homework 扫描器已并入主程序单一入口（main.py）：由 app 的 lifespan
+    # 按 ENABLE_HOMEWORK 自动作为后台任务启动，不再单独拉起子进程。
+    return None
 
 
 def start_main():
@@ -252,14 +240,17 @@ def start_main():
     if port_open(MAIN_PORT):
         log.info("主系统已在运行（端口 %s），复用", MAIN_PORT)
         return None
-    log.info("启动主系统 main.py …")
+    log.info("启动主系统 main.py（单一入口，扫描器随其自动拉起）…")
     try:
         logf = open(MAIN_LOG, "a", encoding="utf-8")
+        env = dict(os.environ)
+        env["ENABLE_HOMEWORK"] = "true" if RUN_SCANNER else "false"
         proc = subprocess.Popen(
             [PYTHON_EXE, "main.py"],
             cwd=str(ROOT),
             stdout=logf, stderr=logf,
             creationflags=CREATE_NO_WINDOW,
+            env=env,
         )
         return proc.pid
     except Exception as e:  # noqa: BLE001
@@ -302,8 +293,6 @@ def run_cycle() -> None:
     ws_ok = wait_port(NAPCAT_WS_PORT, timeout=180)
     if not ws_ok:
         log.warning("NapCat WS %s 在超时内未就绪，仍继续（未扫码则本时段无消息）", NAPCAT_WS_PORT)
-
-    ACTIVE["scanner"] = start_scanner()
 
     log.info("开始抓取消息，持续 %d 分钟 …", CAPTURE_MIN)
     end = time.time() + CAPTURE_MIN * 60

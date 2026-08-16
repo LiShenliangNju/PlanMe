@@ -37,11 +37,13 @@ class Notifier:
         owner_id: int,
         bridge: SchedulerBridge,
         confirm_timeout: float,
+        feed=None,
     ) -> None:
         self.onebot = onebot
         self.owner_id = int(owner_id)
         self.bridge = bridge
         self.confirm_timeout = confirm_timeout
+        self.feed = feed
         self._seq = 0
         self.pending: dict[str, PendingItem] = {}
 
@@ -61,6 +63,18 @@ class Notifier:
             logger.info("已向主号推送作业确认 #%s：%s", cid, extraction.subject)
         except Exception as exc:
             logger.error("推送确认失败 #%s：%s", cid, exc)
+        if self.feed:
+            self.feed.publish(
+                "pending",
+                f"待确认 #{cid}：{extraction.subject or '未识别'} | 截止 {extraction.deadline or '未识别'}（群：{group_name}）",
+                cid=cid,
+                meta={
+                    "subject": extraction.subject,
+                    "deadline": extraction.deadline,
+                    "group": group_name,
+                    "confidence": extraction.confidence,
+                },
+            )
         # 清理超时项
         await self._sweep_expired()
 
@@ -89,6 +103,12 @@ class Notifier:
             logger.info("高置信度作业已自动加入：%s | %s", ex.subject, ex.deadline)
         except Exception as exc:
             logger.error("自动添加通知失败：%s", exc)
+        if self.feed:
+            self.feed.publish(
+                "auto_add",
+                f"高置信度自动加入：{ex.subject or '作业'} | 截止 {ex.deadline or '未识别'}（群：{group_name}）",
+                meta={"subject": ex.subject, "deadline": ex.deadline, "group": group_name, "confidence": ex.confidence},
+            )
 
     def _build_prompt(self, ex: HomeworkExtraction, cid: str, group_name: str) -> str:
         lines = [
@@ -165,10 +185,19 @@ class Notifier:
             self.owner_id, f"{result}（#{item.cid}）\n{detail}".strip()
         )
         self.pending.pop(item.cid, None)
+        if self.feed:
+            self.feed.publish(
+                "confirmed",
+                f"已加入日程（#{item.cid}）：{item.extraction.subject}",
+                cid=item.cid,
+                meta={"subject": item.extraction.subject, "deadline": item.extraction.deadline},
+            )
 
     async def _cancel(self, item: PendingItem) -> None:
         await self.onebot.send_private_msg(self.owner_id, f"已忽略（#{item.cid}）")
         self.pending.pop(item.cid, None)
+        if self.feed:
+            self.feed.publish("cancelled", f"已忽略（#{item.cid}）", cid=item.cid)
 
     async def _sweep_expired(self) -> None:
         now = time.time()

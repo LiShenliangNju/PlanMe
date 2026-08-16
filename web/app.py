@@ -33,7 +33,7 @@ with st.sidebar:
     st.code("今晚8点和李总在腾讯会议线上开会，链接是 https://meeting.tencent.com/ilovesleep", language=None)
 
 # 选项卡划分为：AI 智能对话 和 手动精准添加
-tab1, tab2 = st.tabs(["💬 AI 智能对话", "📝 手动快捷添加"])
+tab1, tab2, tab3 = st.tabs(["💬 AI 智能对话", "📝 手动快捷添加", "🤖 QQ作业"])
 
 # ---------------------------------------------------------
 # Tab 1: AI 智能对话
@@ -151,3 +151,44 @@ with tab2:
                         st.error(f"提交失败: {res}")
                 except Exception as e:
                     st.error(f"无法连接到后端服务器: {e}")
+
+# ---------------------------------------------------------
+# Tab 3: QQ 作业（napcat 窗口：qqbot 推送 + 建议添加的日程）
+# ---------------------------------------------------------
+with tab3:
+    st.subheader("🤖 QQ 作业 · qqbot 推送与建议日程")
+    if st.button("🔄 刷新"):
+        st.rerun()
+
+    # 待确认作业（notifier 内存状态，经 /api/homework/pending 暴露）
+    try:
+        pend = requests.get(f"{API_BASE_URL}/homework/pending", timeout=3).json().get("pending", [])
+    except Exception:
+        pend = []
+    if pend:
+        st.markdown(f"**⏳ 待确认（{len(pend)}）**")
+        for it in pend:
+            st.info(
+                f"**#{it['cid']} {it['subject'] or '未识别'}**\n\n"
+                f"- 🕒 截止: `{it['deadline'] or '未识别'}`\n"
+                f"- 🏫 群: {it['group_name']}\n"
+                f"- 🎯 置信度: {it['confidence']:.2f}"
+            )
+    else:
+        st.caption("暂无待确认作业")
+
+    st.divider()
+
+    # qqbot 推送 / 建议日程流（经 /api/napcat/pushes 暴露）
+    try:
+        pushes = requests.get(f"{API_BASE_URL}/napcat/pushes", timeout=3).json().get("pushes", [])
+    except Exception:
+        pushes = []
+    st.markdown(f"**📨 qqbot 推送 / 建议日程（{len(pushes)}）**")
+    if pushes:
+        for ev in reversed(pushes):
+            ts = datetime.fromtimestamp(ev.get("ts", 0)).strftime("%m-%d %H:%M")
+            st.caption(f"`{ts}` · {ev.get('kind', '')}")
+            st.write(ev.get("text", ""))
+    else:
+        st.caption("暂无推送记录")

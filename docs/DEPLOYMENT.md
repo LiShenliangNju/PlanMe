@@ -70,16 +70,18 @@ cp .config/hmwk_scnr/config.yaml.example .config/hmwk_scnr/config.yaml
 - `qq.group_whitelist` / `teacher_user_ids`：按需收窄监听范围
 - `scheduler.endpoint`：主系统地址（默认 `http://127.0.0.1:8000/api/chat`）
 
-### 2.3 启动顺序（四件套，须按序）
+### 2.3 启动顺序
 1. **NapCat**（独立程序，小号登录、仅绑 127.0.0.1、强 token）
 2. **Ollama**（`ollama pull` + `ollama serve`）
-3. **主系统**（`python main.py` → 8000）
-4. **扫描器**（`python -m core.homework` → 连 NapCat 3001；同时依赖前三者）
+3. **主系统 + 扫描器**（`python main.py` → 8000；扫描器随主程序**单一入口**自动作为同进程后台任务启动，连接 NapCat 3001）
+
+> 扫描器默认开启，可用环境变量 `ENABLE_HOMEWORK=false` 临时关闭。
 
 ### 2.4 验证
 - 在白名单群、用老师身份发一条带「作业 / 截止」关键词的消息；
 - 高置信度 → 主号收到「已自动加入日程」私聊，iCloud 提醒事项出现新待办；
-- 中置信度 → 主号收到确认私聊，回复 `y` / `n` / `改 <时间>` 验证状态机。
+- 中置信度 → 主号收到确认私聊，回复 `y` / `n` / `改 <时间>` 验证状态机；
+- 打开 Web 界面（streamlit）的「🤖 QQ作业」页，可见 qqbot 推送与待确认 / 已添加的建议日程。
 
 ---
 
