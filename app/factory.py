@@ -2,13 +2,14 @@
 
 - CORS 配置
 - register_routers(app)：集中挂载所有 API 路由（新增模块在此 include）
-- on_event startup/shutdown：单一入口启动 / 停止所有后台服务（如 homework 扫描器）
+- lifespan 事件处理器（标准写法，替代已废弃的 @app.on_event）：单一入口启动 / 停止所有后台服务
 
-注意：项目使用的 FastAPI 0.140 / Starlette 1.3.1 下，lifespan= 参数上下文管理器未被
-可靠绑定到 lifespan_context，故改用 @app.on_event 触发后台服务编排（该版本稳定支持）。
+注意：使用 lifespan 上下文管理器（而非已废弃的 @app.on_event）统一编排后台服务启停；
+标准 @asynccontextmanager 写法在本机 FastAPI 0.140 / Starlette 1.3.1 下可正常绑定并触发。
 """
 import asyncio
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 # 确保 .config 在 sys.path（app 包导入即注入；此处兜底）
@@ -29,8 +30,8 @@ from api import register_routers
 logger = logging.getLogger("planme")
 
 
-def _startup_services() -> None:
-    """启动后台服务（扫描器等）。在 on_event startup 中调用。"""
+async def _startup_services() -> None:
+    """启动后台服务（扫描器等）。在 lifespan 的启动阶段调用。"""
     if not getattr(settings, "ENABLE_HOMEWORK", True):
         return
     try:
@@ -44,7 +45,7 @@ def _startup_services() -> None:
 
 
 async def _shutdown_services() -> None:
-    """停止后台服务。在 on_event shutdown 中调用。"""
+    """停止后台服务。在 lifespan 的关闭阶段调用。"""
     if services.homework is not None:
         try:
             await services.homework.stop()
@@ -59,11 +60,20 @@ async def _shutdown_services() -> None:
             pass
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """单一入口生命周期：启动编排所有后台服务，关闭时优雅停止。"""
+    await _startup_services()
+    yield
+    await _shutdown_services()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Planme AI Agent API",
         description="基于 Ollama + CalDAV 的智能日程管家（主系统 + 可插拔后台服务）",
         version="1.1.0",
+        lifespan=lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -73,13 +83,4 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     register_routers(app)
-
-    @app.on_event("startup")
-    async def _on_startup() -> None:
-        _startup_services()
-
-    @app.on_event("shutdown")
-    async def _on_shutdown() -> None:
-        await _shutdown_services()
-
     return app

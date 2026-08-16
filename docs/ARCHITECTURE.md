@@ -11,7 +11,7 @@ PlanMe 由**主系统（FastAPI）** 与**可插拔的后台服务**（如 homew
 | 部件 | 进程 | 入口 | 职责 |
 | --- | --- | --- | --- |
 | **主系统 + 后台服务** | FastAPI (`uvicorn`, 8000) + 同进程后台任务 | `main.py`（`app.factory.create_app`） | 理解自然语言、调用 Ollama、写入 iCloud；按配置统一拉起 homework 等后台服务 |
-| **QQ 作业扫描器** | 主程序**同进程后台任务** | `core/homework/scanner.py` 的 `HomeworkScanner`（由 `app` 的 `on_event` 启停） | 监听 QQ 群消息、识别作业、私聊确认、转发主系统 |
+| **QQ 作业扫描器** | 主程序**同进程后台任务** | `core/homework/scanner.py` 的 `HomeworkScanner`（由 `app.factory` 的 `lifespan` 启停） | 监听 QQ 群消息、识别作业、私聊确认、转发主系统 |
 | **NapCat 集成层** | 内存事件总线（`core/napcat/feed.py`） | `app` 装配 | 聚合 qqbot 推送 + 建议日程，经 `/api/homework`、`/api/napcat` 暴露给 Web 窗口 |
 
 三者通过 HTTP（`POST /api/chat`）协作，**扫描器不做日历写入**，只把作业转成自然语言交给主系统处理。这样主系统是唯一写入 iCloud 的入口，便于审计与复用。
@@ -115,7 +115,7 @@ core/homework/notifier.py  →  Notifier
 - `message_store` 以 `message_id` 为主键 `INSERT OR IGNORE` 天然去重，避免重复询问 / 重复写入。
 - `OneBotClient` 用 `echo` 关联 API 请求 / 响应，断线后 `run_forever` 自动重连。
 - 扫描器与主系统同进程运行（共享内存状态），Web 窗口可直接读取 `notifier.pending` 与 `feed`；扫描器崩溃被 `try/except` 隔离，不影响 FastAPI 主系统。
-- **统一装配**：新增后台服务只需在 `app/services.py` 挂一个实例并在 `app/factory.py` 的 `on_event` 中启停；新增 HTTP 接口只需在 `api/__init__.py` 的 `register_routers` 多 `include` 一个 router。
+- **统一装配**：新增后台服务只需在 `app/services.py` 挂一个实例并在 `app/factory.py` 的 `lifespan` 中启停；新增 HTTP 接口只需在 `api/__init__.py` 的 `register_routers` 多 `include` 一个 router。
 
 ---
 
