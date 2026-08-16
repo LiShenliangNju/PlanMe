@@ -58,8 +58,10 @@ cp .config/caldav/calendar.conf.example .config/caldav/calendar.conf
 
 1. PR 描述请说明：改动动机、主要变更、测试方式。
 2. 确保本地可正常启动主系统（`python main.py`）。homework 扫描器等后台服务已由主程序单一入口统一拉起（受 `ENABLE_HOMEWORK` 控制），无需单独启动。
-3. 如改动 API 契约（`api/schedule.py`、`api/homework.py`、`api/napcat.py`、`schemas/`），请在 PR 中说明前后兼容性影响。
+3. 如改动 API 契约（`api/schedule.py`、`api/homework.py`、`api/lecture.py`、`api/napcat.py`、`schemas/`），请在 PR 中说明前后兼容性影响。
 4. 新增依赖请同步更新 `requirements.txt` 并注明用途。
+5. 如改动 SQLite 表结构（`core/homework/message_store.py`），请使用 `CREATE TABLE IF NOT EXISTS` / `ALTER TABLE` 保持对已有库文件的向前兼容，并在 PR 中说明字段含义与状态取值。
+6. 如新增配置项，**必须同步更新 `.config/hmwk_scnr/config.yaml.example` 或 `.env.example`**——真实配置文件不入库，模板是使用者唯一的参考。
 
 ---
 

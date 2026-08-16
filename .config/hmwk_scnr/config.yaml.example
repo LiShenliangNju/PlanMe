@@ -16,7 +16,7 @@ qq:
   # 显式指定老师 QQ 号（无论角色）
   teacher_user_ids: []
   # 视为「老师」的群角色：owner=群主, admin=管理员
-  leader_roles:
+  teacher_roles:
     - owner
     - admin
 
@@ -54,3 +54,19 @@ storage:
 notifier:
   # 等待你确认 / 取消的超时时间（秒）；超时自动忽略
   confirm_timeout_seconds: 10000
+
+# 群聊图片抓取 → OCR 转 Markdown 存档（讲座 / 通知类图片）
+# 与上面的作业扫描「相互独立」：
+#   - qq.group_whitelist 是作业群白名单（且限定老师身份）；
+#   - image.group_whitelist 是「图片白名单群」，群内所有图片都视为讲座 / 通知，
+#     直接 OCR 存档，不要求发送人是老师。
+# 留空 [] 表示「关闭图片抓取」（不会消耗 OCR 算力）。
+image:
+  # 仅这些群里的图片会被抓取并 OCR（群号列表）；留空 = 关闭
+  group_whitelist: []
+  # OCR 使用的本地视觉模型（需先 `ollama pull qwen2.5vl:7b`）
+  model: "qwen2.5vl:7b"
+  # 两次 OCR 调用的最小间隔（秒），防刷屏 / 风控
+  throttle_seconds: 3
+  # 同一时刻最多并发 OCR 的图片数（显存紧张时调小）
+  max_concurrency: 2
