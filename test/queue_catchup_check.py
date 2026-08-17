@@ -6,7 +6,7 @@
   3. lecture_notes 的 pending → active / error 状态机与「重启续跑」查询正确；
   4. normalize_message 能把 segment 数组还原成 CQ 串，url 的 &amp; 被正确反转义。
 
-用法：python -m test.queue_catchup_check
+用法：python test/queue_catchup_check.py
 """
 
 import asyncio
@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / ".config"))
 
-from core.homework.message_store import MessageStore  # noqa: E402
-from core.homework.scanner import normalize_message, parse_cq_images  # noqa: E402
-from schemas.homework_schema import GroupMessage, LectureNote, Sender  # noqa: E402
+from core.homework.message_store import MessageStore
+from core.homework.scanner import normalize_message, parse_cq_images
+from schemas.homework_schema import GroupMessage, LectureNote, Sender
 
 FAILED: list[str] = []
 

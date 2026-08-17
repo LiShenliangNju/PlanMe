@@ -9,9 +9,16 @@ import logging
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 import yaml
+
+# 防御性注入 .config 到 sys.path（支持 python -m core.homework 独立启动）
+_BASE_DIR = Path(__file__).resolve().parent.parent.parent
+_CFG_DIR = str(_BASE_DIR / ".config")
+if _CFG_DIR not in sys.path:
+    sys.path.insert(0, _CFG_DIR)
 
 from settings import settings
 from core.homework.detector import HomeworkDetector, ACTION_AUTO, ACTION_ASK, ACTION_DROP

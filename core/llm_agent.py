@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 
@@ -66,6 +67,7 @@ class PlanmeAgent:
         print(f"\n{'='*50}\n🚀 [新请求抵达] 用户输入: {user_text}")
 
         for attempt in range(self.max_retries):
+            message = None  # 防止异常发生在 message 赋值前时，下方 except 引用未定义变量
             print(
                 f"--- 🔄 [Agent 尝试 {attempt + 1}/{self.max_retries}] 开始 ---"
             )
@@ -117,12 +119,14 @@ class PlanmeAgent:
 
             except ValidationError as e:
                 error_msg = f"JSON 参数校验失败，请纠正参数后重新输出工具调用:\n{e.json()}"
-                messages.append(message)
+                if message is not None:
+                    messages.append(message)
                 messages.append({"role": "user", "content": error_msg})
                 print(f"❌  [Schema 校验失败]: 准备喂回模型重试...\n{e.errors()}")
 
             except Exception as e:
-                messages.append(message)
+                if message is not None:
+                    messages.append(message)
                 messages.append(
                     {
                         "role": "user",
