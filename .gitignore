@@ -13,6 +13,8 @@ env/
 
 # ===== 运行产物（数据库 / 日志 / 抓取的图片 / 守护进程标志） =====
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
 guardian.log

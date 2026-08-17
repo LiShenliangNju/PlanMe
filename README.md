@@ -159,9 +159,14 @@ ollama serve        # 默认监听 http://localhost:11434
 ### 5.5 启动主系统
 
 ```bash
+# 推荐：直接以 uvicorn 启动（不带 --reload，避免旧进程残留，见下方注意 / docs/DEPLOYMENT.md 第五章）
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+# 或使用内置入口（main.py 内部默认带 --reload 热重载）
 python main.py
-# 或：uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+> ⚠️ **改完代码后务必彻底停掉旧 uvicorn 再重启**：`main.py` 默认 `--reload`，会起「父进程 + 子进程」；若旧子进程没被杀干净，它可能仍霸占 8000 端口跑旧代码，表现为接口 404、前端列表显示 `(db, 0)`（数据其实已经在库里）。排障方式见 `docs/DEPLOYMENT.md` 第五章。
 
 健康检查：`curl http://localhost:8000/api/health`
 
@@ -308,6 +313,7 @@ PlanMe/
 │   ├── calendar_sync.py        # iCloudCalendarManager：CalDAV 写入（Event/Todo 路由）
 │   ├── homework/               # QQ 群作业扫描器 + 图片 OCR（主程序同进程后台服务）
 │       ├── __init__.py         # 导出 HomeworkScanner
+│       ├── __main__.py         # `python -m core.homework` 独立运行入口（扫描器 standalone 启动）
 │       ├── scanner.py          # HomeworkScanner 服务类：双管道路由 + 落库 OCR 队列 + 历史补抓
 │       ├── detector.py         # 关键词预过滤 + Ollama 结构化抽取（含漏报兜底，调用前 await 共享锁）
 │       ├── ocr.py              # ★ ImageOCR：qwen2.5vl 视觉模型转 Markdown；keep_alive/num_ctx/warmup + 队列消费（await 共享锁）

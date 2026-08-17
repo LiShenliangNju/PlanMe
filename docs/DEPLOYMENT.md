@@ -189,7 +189,8 @@ guardian.bat uninstall  # 移除自启任务
 | 老师身份过滤不生效 | 配置里键名写成了 `leader_roles` | 正确键名是 **`teacher_roles`**（scanner 只读这个） |
 | 扫描器启动即报 `SyntaxError` | `.ps1/.bat` 中文编码乱码或 except 缺变量名 | 确保所有启动脚本为纯 ASCII 或 UTF-8 BOM |
 | OneBot 连接失败 | NapCat 未启动 / token 不匹配 / 非 127.0.0.1 | 核对 `onebot_ws_url` 与 `access_token`；确认 NapCat 正向 WS 已开 |
-| `/api/chat` 返回 500 | Ollama 未启动或模型未拉取 | `curl` 健康检查 + `ollama list` 确认模型存在 |
+| `/api/chat` 返回 500 | Ollama 未启动 / 模型未拉取；或旧版本缺 `import asyncio`（堆栈见 `NameError: asyncio` / `UnboundLocalError: message`） | `curl` 健康检查 + `ollama list` 确认模型存在；若为后者请拉取最新代码（已修复） |
+| 改完代码重启后接口 404 / Web 列表 `(db, 0)` | uvicorn `--reload` 模式的旧子进程仍霸占 8000 端口跑旧代码（数据其实在 `qq_homework.db`，只是旧路由没挂上） | 先彻底结束所有 python 进程（`Get-Process -Name python* \| Stop-Process -Force`），再用 `python -m uvicorn main:app --host 0.0.0.0 --port 8000`（不带 `--reload`）干净重启 |
 | Web 作业列表为空但私聊收到了 | db 路径不一致（扫描器写 A、API 读 B） | 两侧都走 `resolve_db_path()`；确认 `storage.db_path` 只有一处配置 |
 | 重启后待确认项没了 | 期望行为是自动恢复 | 检查 `homework_items` 里是否有 `status=pending` 的记录；rehydrate 只恢复 pending |
 
