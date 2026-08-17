@@ -146,7 +146,7 @@ core/homework/notifier.py  →  Notifier
 
 ## 五、历史补抓（catchup）
 
-NapCat 是**纯 push 模式**：只在 WebSocket 连接期间推送新消息，进程没跑的时段不重放，那些消息会永久丢失（典型如 guardian 定时窗口之外）。为此扫描器在 **WS 连上后（`on_ready` 钩子）** 做补抓：
+NapCat 是**纯 push 模式**：只在 WebSocket 连接期间推送新消息，进程没跑的时段不重放，那些消息会永久丢失。为此扫描器在 **WS 连上后（`on_ready` 钩子）** 做补抓：
 
 ```
 WS 连接成功（OneBotClient.on_ready 触发）
@@ -217,11 +217,11 @@ core/homework/ocr.py  →  ImageOCR.ocr(path)
 GET /api/lecture/notes  →  Web「🖼️ 讲座/通知」Tab 用 st.markdown 渲染（pending 显示 ⏳、active ✅、error ⚠️）
 ```
 
-**重启续跑**：进程启动 / WS 重连时 `_resume_pending_ocr()` 把 db 里所有 `status=pending` 的图重新入队，因此**进程被杀、OCR 中途失败、重启都不丢图**。guardian 的 `taskkill /T` 硬杀也不再丢数据（因为落库在 OCR 之前）。
+**重启续跑**：进程启动 / WS 重连时 `_resume_pending_ocr()` 把 db 里所有 `status=pending` 的图重新入队，因此**进程被杀、OCR 中途失败、重启都不丢图**。进程被 `taskkill /T` 硬杀也不再丢数据（因为落库在 OCR 之前）。
 
 **设计权衡**
 - **为什么优先 `get_image` 而不是直接下 url**：NapCat 已把图片缓存在本地，取路径比走 HTTP 更快、也不受图片 url 鉴权 / 过期影响；HTTP 只作兜底（url 里的 `&amp;` 会先 `cq_unescape` 还原，否则兜底下载会 404）。
-- **为什么改成「先落库后队列」而不是「抓取即处理」**：旧实现是每张图一个 task 同步 OCR，落库在 OCR 之后——guardian `taskkill` 时未跑完的 OCR 全丢、图片不留痕。改为先落盘 + 写库 `pending` 再入队，worker 慢速消费，进程被杀 / 失败 / 重启都不丢图（pending 项会续跑）。
+- **为什么改成「先落库后队列」而不是「抓取即处理」**：旧实现是每张图一个 task 同步 OCR，落库在 OCR 之后——进程被 `taskkill` 强杀时未跑完的 OCR 全丢、图片不留痕。改为先落盘 + 写库 `pending` 再入队，worker 慢速消费，进程被杀 / 失败 / 重启都不丢图（pending 项会续跑）。
 - **为什么并发只留一道锁（worker 数）**：旧实现同时有「信号量 `max_concurrency`」和「`throttle_seconds: 40`」两道锁，而 40s 比实测 22s 还长，纯属多余的第二道锁且白白空等；现在删掉信号量、throttle 默认 0，串行完全交给 worker 数。
 - **为什么失败也落库**：`status=error` 的记录保留了 `message_id`、`local_path` 与 `image_url`，将来可以做"重跑 OCR"而不必回溯聊天记录；`attempts` 记录已尝试次数，`retry_max` 用尽才标记 error。
 
@@ -252,16 +252,3 @@ GET /api/lecture/notes  →  Web「🖼️ 讲座/通知」Tab 用 st.markdown �
 | | `error` | OCR 异常，`error` 字段记录原因，记录保留以便重跑（`retry_max` 用尽后标记） |
 
 > ⚠️ `qq_homework.db` 含群聊原文与 OCR 文本，已被 `.gitignore`（`*.db`）排除，不要提交。
-
----
-
-## 八、常驻调度器
-
-`planme_guardian.py` 是单进程守护（替代早期的多 bat 启动方案）：
-- 按设定时间（如每天 10:00 / 16:00 / 22:00）自动拉起 Ollama + NapCat + 扫描器；
-- 运行一段时间后用 `taskkill /T` 清理子进程；
-- 通过 `.guardian_stop` 标志实现优雅停止。
-
-> 因图片已改为「先落盘 + 写库 `pending` 再 OCR」，`taskkill /T` 硬杀不再丢失未完成的 OCR / 图片（pending 项下次启动由 `_resume_pending_ocr` 续跑）。离线窗口的消息则由启动时**历史补抓**补回（见第五节），无需靠「长在线」来避免丢失。
-
-`guardian.bat` 为纯 ASCII 启动器（`start/stop/status/test/install/uninstall`），避免 Windows GBK 编码问题。

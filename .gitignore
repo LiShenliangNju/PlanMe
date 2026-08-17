@@ -11,17 +11,14 @@ env/
 .config/caldav/calendar.conf
 .config/hmwk_scnr/config.yaml
 
-# ===== 运行产物（数据库 / 日志 / 抓取的图片 / 守护进程标志） =====
+# ===== 运行产物（数据库 / 日志 / 抓取的图片） =====
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
-guardian.log
 *.log
 data/lecture_images/
-.guardian.lock
-.guardian_stop
 
 # ===== 编辑器 / IDE =====
 .vscode/

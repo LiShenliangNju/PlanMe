@@ -47,10 +47,7 @@
    curl http://localhost:8000/api/health
    ```
 
-6. **（可选）启动 Web 界面**
-   ```bash
-   streamlit run web/app.py
-   ```
+   > `python main.py` 启动时会**自动拉起 Streamlit Web 界面**并在浏览器打开（`http://localhost:8501`）。仅跑 API、不要 Web 时设 `ENABLE_WEB=false`；Web 独立开发调试可另行 `streamlit run web/app.py`。
 
 ---
 
@@ -163,23 +160,9 @@ catchup:
 
 ---
 
-## 四、常驻调度器（Windows）
+## 四、常见问题（排障）
 
-```bat
-guardian.bat start      # 启动（常驻，无窗口），日志见 guardian.log
-guardian.bat stop       # 优雅停止
-guardian.bat status     # 是否运行 / 下次触发时间
-guardian.bat test       # 自检路径与端口，不启动任何服务
-guardian.bat install    # 登录时自动启动（任务计划程序）
-guardian.bat uninstall  # 移除自启任务
-```
-> `guardian.bat` 为纯 ASCII 文件，避免 Windows GBK/CP936 下中文注释导致脚本报错。
-
----
-
-## 五、常见问题（排障）
-
-### 5.1 主系统 / 作业扫描
+### 4.1 主系统 / 作业扫描
 
 | 现象 | 可能原因 | 处理 |
 | --- | --- | --- |
@@ -194,7 +177,7 @@ guardian.bat uninstall  # 移除自启任务
 | Web 作业列表为空但私聊收到了 | db 路径不一致（扫描器写 A、API 读 B） | 两侧都走 `resolve_db_path()`；确认 `storage.db_path` 只有一处配置 |
 | 重启后待确认项没了 | 期望行为是自动恢复 | 检查 `homework_items` 里是否有 `status=pending` 的记录；rehydrate 只恢复 pending |
 
-### 5.2 图片 OCR
+### 4.2 图片 OCR
 
 | 现象 | 可能原因 | 处理 |
 | --- | --- | --- |

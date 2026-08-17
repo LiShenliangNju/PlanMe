@@ -32,7 +32,6 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 | **历史补抓（catchup）** | NapCat 是纯 push 模式，进程离线时段不重放；启动时按 `group_progress` 断点（`last_time` + `last_message_id`）调用 OneBot `get_group_msg_history` 把空窗期补回，正序重放复用同一条 `_on_event` 链路（断点 `MAX()` 单调递增，二次补抓不重复入队） |
 | **GPU 单卡推理互斥** | 文本识别（`qwen2.5:7b`）、图片 OCR（`qwen2.5vl:7b`）、主系统对话（`qwen2.5:7b`）三路共用一把全局锁 `core/ollama_gpu.inference_lock`，同一时刻只有一次 Ollama 推理在跑 —— 单张 8GB 卡不再被两模型并发争抢、反复 swap |
 | **Web 多页展示** | Streamlit 四页签：AI 对话 / 手动添加 / 🤖 QQ作业（**直读 db 权威列表** + 实时推送流）/ 🖼️ 讲座通知（渲染 OCR Markdown） |
-| **常驻调度器** | `planme_guardian.py` 单进程守护，按设定时间自动拉起 Ollama + NapCat + 主系统（扫描器随主系统一并启动）并定时清理 |
 
 ---
 
@@ -105,7 +104,6 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 - **前端**：Streamlit
 - **QQ 接入**：OneBot 11（NapCat），`websockets` 客户端
 - **存储**：SQLite（`aiosqlite`，WAL 模式）——消息去重、作业状态、OCR 存档
-- **守护进程**：纯 Python + Windows `taskkill`（调度 / 清理）
 
 ---
 
@@ -156,21 +154,28 @@ ollama pull qwen2.5vl:7b
 ollama serve        # 默认监听 http://localhost:11434
 ```
 
-### 5.5 启动主系统
+### 5.5 启动主系统（Web 会一并自动打开）
 
 ```bash
-# 推荐：直接以 uvicorn 启动（不带 --reload，避免旧进程残留，见下方注意 / docs/DEPLOYMENT.md 第五章）
-python -m uvicorn main:app --host 0.0.0.0 --port 8000
-
-# 或使用内置入口（main.py 内部默认带 --reload 热重载）
+# 推荐：用内置入口（main.py）
+#   - 自动拉起 Streamlit Web 界面并在浏览器打开（http://localhost:8501）
+#   - 再启动 FastAPI 主系统（uvicorn，端口 8000，默认 --reload 热重载）
 python main.py
+
+# 只想跑 API、不要 Web：关闭自动拉起
+ENABLE_WEB=false python main.py
+
+# 或纯 uvicorn 启动（不带 --reload，避免旧进程残留，见下方注意 / docs/DEPLOYMENT.md 第四章）
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-> ⚠️ **改完代码后务必彻底停掉旧 uvicorn 再重启**：`main.py` 默认 `--reload`，会起「父进程 + 子进程」；若旧子进程没被杀干净，它可能仍霸占 8000 端口跑旧代码，表现为接口 404、前端列表显示 `(db, 0)`（数据其实已经在库里）。排障方式见 `docs/DEPLOYMENT.md` 第五章。
+> ⚠️ **改完代码后务必彻底停掉旧 uvicorn 再重启**：`main.py` 默认 `--reload`，会起「父进程 + 子进程」；若旧子进程没被杀干净，它可能仍霸占 8000 端口跑旧代码，表现为接口 404、前端列表显示 `(db, 0)`（数据其实已经在库里）。排障方式见 `docs/DEPLOYMENT.md` 第四章。
 
 健康检查：`curl http://localhost:8000/api/health`
 
-### 5.6 启动 Web 界面（可选）
+### 5.6 Web 界面（随主系统自动打开）
+
+`python main.py` 启动时会**自动拉起 Streamlit Web 界面**并在浏览器打开 `http://localhost:8501`，无需再单独执行命令。如需独立开发调试 Web，也可手动运行：
 
 ```bash
 streamlit run web/app.py
@@ -220,20 +225,9 @@ image:
 
 > 与作业扫描的区别：作业管道只认**老师身份的文本消息**；图片管道不限身份，只看群号是否在 `image.group_whitelist` 里。两者互不影响。
 >
-> ⚠️ **GPU 共享锁**：文本识别、图片 OCR、主系统对话三路共用一把全局推理锁（`core/ollama_gpu.py`），同一时刻只有一次 Ollama 推理在跑。若你的 GPU 单卡装不下两个 7B 模型同跑，这是必要的互斥保护；彻底消除模型切换代价可把文本识别也改用 `qwen2.5vl:7b`（单模型方案，见下文 5.11）。
+> ⚠️ **GPU 共享锁**：文本识别、图片 OCR、主系统对话三路共用一把全局推理锁（`core/ollama_gpu.py`），同一时刻只有一次 Ollama 推理在跑。若你的 GPU 单卡装不下两个 7B 模型同跑，这是必要的互斥保护；彻底消除模型切换代价可把文本识别也改用 `qwen2.5vl:7b`（单模型方案，见下文 5.10）。
 
-### 5.9 常驻调度器（可选，Windows）
-
-`planme_guardian.py` 提供单进程守护，按设定时间自动拉起相关服务并清理：
-
-```bat
-guardian.bat start      # 启动（常驻，无窗口）
-guardian.bat stop       # 优雅停止（写停止标志）
-guardian.bat status     # 查看是否运行 / 下次触发时间
-guardian.bat test       # 自检路径与端口，不启动任何服务
-```
-
-### 5.10 验证
+### 5.9 验证
 
 项目在 `test/` 下提供若干可独立运行的验证脚本（`python test/xxx.py`）：
 
@@ -258,9 +252,9 @@ MODEL=qwen2.5vl:7b OLLAMA_HOST=http://localhost:11434 python test/qwenvl_ocr.py
 
 > 该测试会先探活 Ollama 并确认 `qwen2.5vl:7b` 已拉取，再调用 `core/homework/ocr.ImageOCR` 打印 Markdown 结果；输出非空即视为通过。
 
-### 5.11 历史补抓（catchup）与离线窗口
+### 5.10 历史补抓（catchup）与离线窗口
 
-NapCat 是**纯 push 模式**：只在 WebSocket 连接期间把新群消息推过来，进程没跑的时段（比如 guardian 定时窗口之外）**不会重放**，那些消息会永久丢失。为此扫描器在 **WS 连上后（`on_ready`）** 按各群断点补抓：
+NapCat 是**纯 push 模式**：只在 WebSocket 连接期间把新群消息推过来，进程没跑的时段**不会重放**，那些消息会永久丢失。为此扫描器在 **WS 连上后（`on_ready`）** 按各群断点补抓：
 
 - 断点存于 `group_progress` 表：`last_time`（处理到的时间戳）+ `last_message_id`（消息锚点），写入用 `MAX()` 保证**单调递增**，补抓重放老消息不会把锚点拽回去。
 - 启动时调用 OneBot `get_group_msg_history` 分页拉取断点之后的历史，按时间自排序、断点过滤、**正序重放**复用同一条 `_on_event` 链路（`_history_to_event`），去重完全交给主键 / `UNIQUE(message_id, image_seq)`。
@@ -286,9 +280,7 @@ catchup:
 
 ```
 PlanMe/
-├── main.py                      # 唯一启动入口：create_app() + 后台服务编排 + uvicorn
-├── planme_guardian.py           # 常驻调度器（守护进程，仅拉起 main.py 单一入口）
-├── guardian.bat                # Windows 启动器（纯 ASCII，GBK 安全）
+├── main.py                      # 唯一启动入口：create_app() + 后台服务编排 + uvicorn + 自动拉起 Web
 ├── requirements.txt            # 统一依赖清单
 ├── .env.example                # 环境变量模板（真实 .env 请勿提交）
 ├── .gitignore
