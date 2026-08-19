@@ -47,7 +47,7 @@
    curl http://localhost:8000/api/health
    ```
 
-   > `python main.py` 启动时会**自动拉起 Streamlit Web 界面**并在浏览器打开（`http://localhost:8501`）。仅跑 API、不要 Web 时设 `ENABLE_WEB=false`；Web 独立开发调试可另行 `streamlit run web/app.py`。
+   > `python main.py` 启动时会**自动打开内置前端 SPA**（挂载于 `/ui`，浏览器访问 `http://localhost:8000/ui/`）。仅跑 API、不自动打开浏览器时设 `ENABLE_WEB=false`；前端页面本身经 FastAPI `StaticFiles` 提供，无需单独启动。
 
 ---
 
@@ -88,7 +88,7 @@ cp .config/hmwk_scnr/config.yaml.example .config/hmwk_scnr/config.yaml
 - 在白名单群、用老师身份发一条带「作业 / 截止」关键词的消息；
 - 高置信度 → 主号收到「已自动加入日程」私聊，iCloud 提醒事项出现新待办；
 - 中置信度 → 主号收到确认私聊，回复 `y` / `n` / `改 <时间>` 验证状态机；
-- 打开 Web 界面（streamlit）的「🤖 QQ作业」页，可见**落库的作业列表（带状态徽标）** 与 qqbot 实时推送流；
+- 打开 Web 界面（内置 SPA `/ui/`）的「🤖 QQ作业」页，可见**落库的作业列表（带状态徽标）** 与 qqbot 实时推送流；
 - 重启主系统后作业列表**仍在**（读的是 db），且 `pending` 项会自动恢复到待确认队列——这是验证落库是否生效的最快方法；
 - 也可直接看接口：`curl http://localhost:8000/api/homework/items?limit=5`。
 

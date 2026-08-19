@@ -9,7 +9,7 @@
 PlanMe 是一个本地优先（local-first）的日程自动化工具，核心思路是：
 
 - 用**自然语言**告诉它任何日程或待办，本地 Ollama 模型负责理解意图、抽取结构化字段，并通过 **Tool Calling** 直接写入 iCloud 日历 / 提醒事项；
-- 提供 **Streamlit** 可视化界面，既能聊天式创建，也能手动精准添加；
+- 自带 **Web 前端**（内置 SPA，随主系统挂载于 `/ui`，启动后自动打开），既能聊天式创建，也能手动精准添加；
 - 附带一个 **QQ 作业扫描器**（主程序同进程后台服务）：监听 NapCat（OneBot 11）转发的 QQ 群消息，用关键词预过滤 + 大模型抽取判断「是不是作业」，高置信度自动入日历，低置信度私聊问你确认，识别结果与决策状态**全程落库**；
 - 附带 **群图片 OCR 存档**：对**独立白名单群**里的图片调用本地视觉模型 `qwen2.5vl`，转成 Markdown 存入 SQLite，在 Web 端直接渲染阅读（适合讲座、通知、海报类图片集合）。
 
@@ -23,15 +23,17 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 | --- | --- |
 | **智能对话（主系统）** | 自然语言建日程 / 待办；Ollama `qwen2.5` 系列模型；基于 Pydantic Schema 的强校验与自动重试 |
 | **双日历路由** | `Event` → 写入 iCloud「日程」日历；`Todo` → 写入 iCloud「提醒」日历（可按类型自动匹配） |
-| **Web 界面** | Streamlit 双页签：AI 智能对话 + 手动快捷添加，实时展示系统健康状态 |
-| **HTTP API** | `POST /api/chat`（自然语言）、`POST /api/manual-item`（绕过 AI）、`GET /api/health`（健康检查） |
+| **Web 界面** | 内置 SPA（`web/frontend/`，挂载于 `/ui`）：仪表盘 / 智能对话 / 手动添加 / QQ作业 / 讲座通知 / 连接状态 / 配置白名单 七页签，`main.py` 启动后自动在浏览器打开 |
+| **HTTP API** | `POST /api/chat`（自然语言，支持多轮 `history` 记忆）、`POST /api/manual-item`（绕过 AI）、`GET /api/health`（健康检查）、`GET/POST /api/config/whitelist`（白名单读写） |
+| **多轮对话记忆** | 前端把渲染过的对话历史随 `/api/chat` 回传，后端清洗（去脏结构、截断、最多保留最近 10 轮）后回灌给 Ollama，同一会话上下文连贯 |
+| **白名单在线编辑** | Web「配置/白名单」页可直接增删作业群 / 图片 OCR 群；后端对 `config.yaml` **定点改写保注释**（不整文件重写、不丢 YAML 注释），保存后重启扫描器生效 |
 | **QQ 作业扫描器** | 作为主程序的**同进程后台服务**运行（单一入口统一启停）；OneBot 11（NapCat）接入；关键词预过滤 + 大模型结构化抽取；**漏报兜底**避免真作业被静默丢弃 |
 | **私聊确认状态机** | 识别到作业后向主号私聊，支持 `y / n / 改 <时间>` 指令；超时自动忽略 |
 | **作业结果落库** | 识别结果与决策状态写入 `homework_items` 表（`pending / confirmed / auto / ignored / timeout`）；**重启不丢、可历史回看**，待确认项在重启后自动恢复 |
 | **群图片 OCR 存档** | **独立的图片白名单群**：群内图片经 OneBot 抓取后落盘，先写库 `status=pending` 再交给后台 OCR 队列（worker 串行慢慢解析），存入 `lecture_notes` 表（按 `message_id + 图片序号` 去重）；**进程被杀 / OCR 失败 / 重启都不丢图**，pending 项重启后自动续跑 |
 | **历史补抓（catchup）** | NapCat 是纯 push 模式，进程离线时段不重放；启动时按 `group_progress` 断点（`last_time` + `last_message_id`）调用 OneBot `get_group_msg_history` 把空窗期补回，正序重放复用同一条 `_on_event` 链路（断点 `MAX()` 单调递增，二次补抓不重复入队） |
 | **GPU 单卡推理互斥** | 文本识别（`qwen2.5:7b`）、图片 OCR（`qwen2.5vl:7b`）、主系统对话（`qwen2.5:7b`）三路共用一把全局锁 `core/ollama_gpu.inference_lock`，同一时刻只有一次 Ollama 推理在跑 —— 单张 8GB 卡不再被两模型并发争抢、反复 swap |
-| **Web 多页展示** | Streamlit 四页签：AI 对话 / 手动添加 / 🤖 QQ作业（**直读 db 权威列表** + 实时推送流）/ 🖼️ 讲座通知（渲染 OCR Markdown） |
+| **Web 多页展示** | 内置 SPA 七页签：仪表盘 / AI 对话（**多轮记忆**）/ 手动添加 / 🤖 QQ作业（**直读 db 权威列表** + 实时推送流）/ 🖼️ 讲座通知（渲染 OCR Markdown）/ 连接状态 / ⚙️ 配置·白名单（**在线编辑，定点改写保注释**） |
 
 ---
 
@@ -41,7 +43,7 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
 
 ```
 [ 输入层 ]
-  用户自然语言 ──► Streamlit Web UI (4 页签)
+  用户自然语言 ──► 内置 SPA (/ui，随主系统挂载、启动自动打开)
   QQ 群消息 ─────► NapCat (OneBot 11 正向 WS, 127.0.0.1:3001)
 
         │                                    │
@@ -76,9 +78,10 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
         ▼                                   ▲
   iCloud CalDAV                             │ Web 直读（重启不丢）
                                             │
-  Streamlit ◄── /api/homework/items ────────┘
-            ◄── /api/lecture/notes  ────────┘
-            ◄── /api/homework/{pending,feed}（内存实时流）
+  SPA (/ui) ◄── /api/homework/items ────────┘
+           ◄── /api/lecture/notes  ────────┘
+           ◄── /api/homework/{pending,feed}（内存实时流）
+           ◄── /api/config/whitelist（白名单读写）
 ```
 
 **两条独立管道，两套独立白名单**：
@@ -101,7 +104,7 @@ PlanMe 是一个本地优先（local-first）的日程自动化工具，核心�
   - 调用调优：`keep_alive="30m"`（模型常驻显存，根治反复冷启动）、`num_ctx=8192`（压 KV cache 防 CPU offload）、`num_predict=2048`、`Client(timeout=300)`；启动时 `warmup()` 预热
   - **GPU 单卡互斥**：`core/ollama_gpu.inference_lock` 全局 `asyncio.Lock()`，三路推理共用，保证同一时刻仅一次调用（单卡只装得下一个模型）
 - **日历同步**：`caldav`（iCloud CalDAV 协议）
-- **前端**：Streamlit
+- **前端**：内置 SPA（原生 HTML / CSS / JS，`web/frontend/`，经 FastAPI `StaticFiles` 挂载于 `/ui`，与后端同源、直接 fetch `/api/*`）
 - **QQ 接入**：OneBot 11（NapCat），`websockets` 客户端
 - **存储**：SQLite（`aiosqlite`，WAL 模式）——消息去重、作业状态、OCR 存档
 
@@ -154,15 +157,15 @@ ollama pull qwen2.5vl:7b
 ollama serve        # 默认监听 http://localhost:11434
 ```
 
-### 5.5 启动主系统（Web 会一并自动打开）
+### 5.5 启动主系统（前端 UI 会自动打开）
 
 ```bash
 # 推荐：用内置入口（main.py）
-#   - 自动拉起 Streamlit Web 界面并在浏览器打开（http://localhost:8501）
-#   - 再启动 FastAPI 主系统（uvicorn，端口 8000，默认 --reload 热重载）
+#   - 启动 FastAPI 主系统（uvicorn，端口 8000，默认 --reload 热重载）
+#   - 前端 SPA 已随主系统挂载在 /ui，服务就绪后自动在浏览器打开 http://localhost:8000/ui/
 python main.py
 
-# 只想跑 API、不要 Web：关闭自动拉起
+# 只想跑 API、不自动打开浏览器：关闭自动打开
 ENABLE_WEB=false python main.py
 
 # 或纯 uvicorn 启动（不带 --reload，避免旧进程残留，见下方注意 / docs/DEPLOYMENT.md 第四章）
@@ -175,13 +178,9 @@ python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 ### 5.6 Web 界面（随主系统自动打开）
 
-`python main.py` 启动时会**自动拉起 Streamlit Web 界面**并在浏览器打开 `http://localhost:8501`，无需再单独执行命令。如需独立开发调试 Web，也可手动运行：
+`python main.py` 启动时会**自动打开前端 SPA**（`http://localhost:8000/ui/`），无需再单独执行命令。该 SPA 由 FastAPI 直接挂载（`app/factory.py` 中的 `StaticFiles`，指向 `web/frontend/`），与后端**同源**，无需跨域配置。若只想独立调试前端静态页，直接访问 `/ui/` 即可；前端页面本身不含后端逻辑，所有数据都通过 `fetch('/api/*')` 获取。
 
-```bash
-streamlit run web/app.py
-```
-
-打开浏览器访问 Streamlit 提示的地址，即可用自然语言添加日程，或手动精准填写。
+打开浏览器即可使用自然语言添加日程、手动精准填写、查看作业与讲座列表、在线编辑白名单。
 
 ### 5.7 启用 QQ 作业扫描器（可选）
 
@@ -280,7 +279,7 @@ catchup:
 
 ```
 PlanMe/
-├── main.py                      # 唯一启动入口：create_app() + 后台服务编排 + uvicorn + 自动拉起 Web
+├── main.py                      # 唯一启动入口：create_app() + 后台服务编排 + uvicorn + 自动打开前端 /ui
 ├── requirements.txt            # 统一依赖清单
 ├── .env.example                # 环境变量模板（真实 .env 请勿提交）
 ├── .gitignore
@@ -294,10 +293,11 @@ PlanMe/
 │   └── services.py             # ServiceManager：后台服务注册表（start/stop 扩展点）
 ├── api/
 │   ├── __init__.py             # register_routers(app)：统一挂载各模块 router
-│   ├── schedule.py             # 原计划 routes.py：/api/chat、/api/manual-item、/api/health
+│   ├── schedule.py             # /api/chat（自然语言，含多轮 history）、/api/manual-item、/api/health
 │   ├── homework.py             # /api/homework/*：status/pending/feed（内存）+ items（直读 db）
 │   ├── lecture.py              # ★ /api/lecture/notes：直读 lecture_notes 表（OCR Markdown）
-│   └── napcat.py               # /api/napcat/* 连接状态与推送流
+│   ├── napcat.py               # /api/napcat/* 连接状态与推送流
+│   └── config.py               # ★ /api/config/whitelist：白名单读取 + 定点改写保注释写回
 ├── core/
 │   ├── __init__.py
 │   ├── ollama_gpu.py           # ★ 单卡 GPU 全局推理锁 inference_lock（三路 Ollama 调用共用）
@@ -322,7 +322,11 @@ PlanMe/
 │                               #   + HomeworkItem（落库的作业与状态）+ LectureNote（OCR 存档，含 local_path/attempts/error）
 │                               #   + GroupProgress（补抓锚点：last_time + last_message_id）
 ├── web/
-│   └── app.py                  # Streamlit 前端（4 页签：对话 / 手动 / 🤖QQ作业 / 🖼️讲座通知）
+│   ├── frontend/               # ★ 内置 SPA 前端（挂载于 /ui，启动自动打开）
+│   │   ├── index.html          # 页面骨架：七页签结构 + 侧边栏 + 顶栏
+│   │   ├── styles.css          # 视觉样式（严格还原设计稿：深色侧栏/米白底/Action Blue/发丝线）
+│   │   └── app.js              # 路由切换 / 状态管理 / fetch 对接 REST / 多轮对话 / 白名单编辑
+│   └── (app.py 已随 Streamlit 过渡方案移除)
 ├── test/
 │   ├── icloud_server.py        # iCloud / CalDAV 连接测试
 │   ├── ollama_server.py        # Ollama 连接测试
@@ -357,7 +361,7 @@ PlanMe/
 
 | 方法 | 路径 | 说明 | 数据来源 |
 | --- | --- | --- | --- |
-| `POST` | `/api/chat` | 自然语言创建日程 / 待办 | Ollama + CalDAV |
+| `POST` | `/api/chat` | 自然语言创建日程 / 待办（请求体可带 `history` 多轮记忆） | Ollama + CalDAV |
 | `POST` | `/api/manual-item` | 结构化创建（绕过 AI） | CalDAV |
 | `GET` | `/api/health` | 健康检查 | — |
 | `GET` | `/api/homework/status` | 扫描器是否启用 / 运行中 | 内存 |
@@ -365,6 +369,7 @@ PlanMe/
 | `GET` | `/api/homework/feed` | 最近的推送 / 建议日程事件 | 内存（feed） |
 | `GET` | `/api/homework/items?limit=200` | **作业权威列表（含状态、可历史回看）** | db `homework_items` |
 | `GET` | `/api/lecture/notes?limit=100` | **讲座 / 通知 OCR 存档（Markdown）** | db `lecture_notes` |
+| `GET/POST` | `/api/config/whitelist` | **读取 / 更新作业群与图片 OCR 群白名单（定点改写保注释）** | `.config/hmwk_scnr/config.yaml` |
 | `GET` | `/api/napcat/*` | NapCat 连接状态与推送流 | 内存 |
 
 ---
@@ -419,7 +424,9 @@ curl http://localhost:8000/api/lecture/notes?limit=5
 ## English Abstract
 
 **PlanMe** is a local-first smart schedule manager built on **Ollama** (local LLM) and **iCloud CalDAV**.
-It turns natural-language requests into iCloud calendar events / reminders via Tool Calling, and ships a Streamlit UI.
+It turns natural-language requests into iCloud calendar events / reminders via Tool Calling, and ships a built-in SPA
+frontend (`web/frontend/`, served at `/ui` by FastAPI, auto-opened on `python main.py`) with multi-turn chat memory
+and an online whitelist editor (`GET/POST /api/config/whitelist`, point-edit preserving YAML comments).
 
 Two optional QQ pipelines run as in-process background services via **OneBot 11 / NapCat**, each with its **own group whitelist**:
 

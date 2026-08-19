@@ -1,7 +1,7 @@
 """NapCat 集成层：qqbot 推送与建议日程的内存事件总线。
 
 扫描器的 notifier 把「qqbot 推送 / 待确认 / 已自动添加 / 已确认 / 已忽略 / 状态变更」
-发布到这里；API（api/homework.py、api/napcat.py）与 Web（web/app.py）消费同一份数据，
+发布到这里；API（api/homework.py、api/napcat.py）与 Web（内置 SPA，web/frontend/）消费同一份数据，
 从而在 Web 上呈现 napcat 窗口。
 
 设计为进程内、线程/协程安全的简单环形缓冲（CPython GIL 下 list.append 原子）。

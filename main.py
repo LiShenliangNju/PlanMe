@@ -4,17 +4,18 @@
 所有后台服务（homework 扫描器等）由 app 的 lifespan 统一编排启停。
 
 运行本文件（python main.py）会：
-  1. 自动拉起 Streamlit Web 界面（web/app.py）并在浏览器打开；
-  2. 启动 FastAPI 主系统（uvicorn，端口 8000）。
+  1. 启动 FastAPI 主系统（uvicorn，端口 8000，默认 --reload 热重载）；
+  2. 前端 SPA 已由 app.factory.create_app() 以静态目录挂载在 /ui，
+     服务就绪后 main.py 自动在默认浏览器打开 http://localhost:8000/ui/。
 
-Web 界面默认随主系统一同启动；可通过环境变量 ENABLE_WEB=false 关闭。
+Streamlit 过渡界面已移除（web/app.py 已删除），不再以子进程方式拉起；
+可用环境变量 ENABLE_WEB=false 关闭「自动打开浏览器」（界面仍可通过 /ui 访问）。
 """
-import atexit
 import os
-import signal
 import socket
-import subprocess
-import sys
+import threading
+import time
+import webbrowser
 
 import uvicorn
 
@@ -22,59 +23,39 @@ from app.factory import create_app
 
 app = create_app()
 
-# Streamlit 默认监听端口，仅用于「是否已启动」探测（实际端口由 streamlit 自动分配）。
-WEB_DEFAULT_PORT = int(os.getenv("WEB_PORT", "8501"))
+# uvicorn 监听端口，同时用于拼接自动打开的前端地址
+PORT = int(os.getenv("PORT", "8000"))
+UI_URL = f"http://localhost:{PORT}/ui/"
 
 
-def _port_open(port: int, host: str = "127.0.0.1") -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(1.0)
-        try:
-            s.connect((host, port))
-            return True
-        except OSError:
-            return False
+def _wait_and_open_ui() -> None:
+    """后台线程：等服务端口就绪后，自动用默认浏览器打开前端 UI。
 
-
-def _launch_web() -> None:
-    """以子进程方式拉起 Streamlit Web 界面（非阻塞）。
-
-    - 环境变量 ENABLE_WEB=false 时跳过；
-    - 若 Web 端口已被占用（例如上一次残留进程未退出），不重复拉起，避免端口竞争；
-    - 进程退出时自动终止该子进程，避免孤立的 streamlit 实例。
+    - 环境变量 ENABLE_WEB=false 时跳过自动打开；
+    - 轮询端口直到可连（uvicorn 启动需要一点时间），最多等待 30 秒；
+    - 以 daemon 线程运行，随主进程退出，无需额外清理。
     """
     if os.getenv("ENABLE_WEB", "true").lower() == "false":
         return
-    if _port_open(WEB_DEFAULT_PORT):
-        print(f"[Planme] Web 端口 {WEB_DEFAULT_PORT} 已被占用，跳过重复启动 Streamlit。")
-        return
 
-    root = os.path.dirname(os.path.abspath(__file__))
-    print("[Planme] 正在启动 Streamlit Web 界面 …")
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "streamlit", "run", "web/app.py",
-             "--server.headless", "false",
-             "--browser.gatherUsageStats", "false"],
-            cwd=root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as exc:  # noqa: BLE001
-        print(f"[Planme] 启动 Web 失败（主系统仍正常运行）：{exc}")
-        return
-
-    def _cleanup() -> None:
-        if proc.poll() is None:
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
             try:
-                proc.send_signal(signal.SIGTERM)
-            except Exception:
-                pass
+                s.connect(("127.0.0.1", PORT))
+                break
+            except OSError:
+                time.sleep(0.5)
+    else:
+        print(f"[Planme] 等待后端端口 {PORT} 超时，未自动打开浏览器；请手动访问 {UI_URL}")
+        return
 
-    atexit.register(_cleanup)
-    print(f"[Planme] Web 界面即将在浏览器打开：http://localhost:{WEB_DEFAULT_PORT}")
+    time.sleep(1.0)  # 给 uvicorn 一点时间完成路由绑定
+    print(f"[Planme] 正在浏览器打开前端 UI：{UI_URL}")
+    webbrowser.open(UI_URL, new=2)
 
 
 if __name__ == "__main__":
-    _launch_web()
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    threading.Thread(target=_wait_and_open_ui, daemon=True).start()
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)

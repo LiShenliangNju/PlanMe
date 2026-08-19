@@ -83,4 +83,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     register_routers(app)
+
+    # 挂载前端 Web App（严格还原设计稿的 SPA）：python main.py 后访问 http://localhost:8000/ui
+    frontend_dir = BASE_DIR / "web" / "frontend"
+    if frontend_dir.exists():
+        from fastapi.staticfiles import StaticFiles
+        app.mount("/ui", StaticFiles(directory=str(frontend_dir), html=True), name="ui")
+
     return app

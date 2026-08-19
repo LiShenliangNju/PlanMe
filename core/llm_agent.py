@@ -50,7 +50,29 @@ class PlanmeAgent:
         content = message.get("content", "")
         return {"type": "text", "reply": content}
 
-    async def process_query(self, user_text: str) -> dict:
+    @staticmethod
+    def _sanitize_history(history, max_turns: int = 10) -> list:
+        """清洗前端传来的对话历史，只保留 user/assistant 的纯文本轮次。
+
+        防御：忽略非预期结构、超长内容、非文本角色，避免把脏数据喂给 Ollama；
+        同时保证不以 assistant 开头（Ollama 不允许首条为 assistant）。
+        """
+        if not history:
+            return []
+        out = []
+        for item in history[-max_turns * 2:]:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role not in ("user", "assistant") or not isinstance(content, str):
+                continue
+            out.append({"role": role, "content": content[:2000]})
+        while out and out[0]["role"] != "user":
+            out.pop(0)
+        return out
+
+    async def process_query(self, user_text: str, history: list = None) -> dict:
         tz = ZoneInfo(settings.TIMEZONE)
         now_str = datetime.now(tz).strftime("%Y-%m-%dT%H:%M:%S%z")
 
@@ -59,10 +81,12 @@ class PlanmeAgent:
             "一旦识别到用户创建/记录日程或待办的意图，优先触发 Tool calling 来响应；若非日程请求，用自然语言回复。\n"
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text},
-        ]
+        # 多轮上下文：把前端渲染过的对话历史回灌给模型（最多保留最近 10 轮，避免超出上下文窗口）
+        context = self._sanitize_history(history, max_turns=10)
+
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(context)
+        messages.append({"role": "user", "content": user_text})
 
         print(f"\n{'='*50}\n🚀 [新请求抵达] 用户输入: {user_text}")
 
@@ -82,7 +106,7 @@ class PlanmeAgent:
                         messages=messages,
                         tools=list(self.tools.values()),
                         options={
-                            "num_ctx": 4096,
+                            "num_ctx": 8192,
                             "num_gpu": 99,
                             "temperature": 0.0,
                             "num_predict": 512,

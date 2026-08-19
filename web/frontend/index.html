@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Planme · 智能日程管家</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- ============ 侧边栏 ============ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-logo">📅 Planme</div>
+        <div class="brand-sub">智能日程管家</div>
+      </div>
+      <div class="nav-label">主 导 航</div>
+      <nav class="nav">
+        <a class="nav-item" data-route="dashboard"><span class="nav-bar"></span><span class="nav-ico">📊</span>仪表盘</a>
+        <a class="nav-item" data-route="chat"><span class="nav-bar"></span><span class="nav-ico">💬</span>智能对话</a>
+        <a class="nav-item" data-route="manual"><span class="nav-bar"></span><span class="nav-ico">📝</span>手动添加</a>
+        <a class="nav-item" data-route="homework"><span class="nav-bar"></span><span class="nav-ico">🤖</span>QQ 作业</a>
+        <a class="nav-item" data-route="lecture"><span class="nav-bar"></span><span class="nav-ico">🖼️</span>讲座 / 通知</a>
+        <a class="nav-item" data-route="status"><span class="nav-bar"></span><span class="nav-ico">🔌</span>连接状态</a>
+        <a class="nav-item" data-route="config"><span class="nav-bar"></span><span class="nav-ico">⚙️</span>配置 / 白名单</a>
+      </nav>
+      <div class="sidebar-foot">v1.0 · 本地部署 · Ollama</div>
+    </aside>
+
+    <!-- ============ 主区域 ============ -->
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-title">
+          <div class="tt-main" id="ttMain">仪表盘</div>
+          <div class="tt-sub" id="ttSub">系统总览 · 本地服务状态与近期动态</div>
+        </div>
+        <div class="topbar-right">
+          <div class="pill" id="pillBackend"><span class="dot"></span><span class="pill-txt">后端正常</span></div>
+          <div class="pill" id="pillNapcat"><span class="dot"></span><span class="pill-txt">NapCat 已连接</span></div>
+          <div class="user">
+            <div class="user-avatar">亮</div>
+            <div class="user-name">亮哥</div>
+          </div>
+        </div>
+      </header>
+
+      <main class="content">
+        <!-- ============ 仪表盘 ============ -->
+        <section class="page" id="page-dashboard" data-route="dashboard">
+          <div class="h1">欢迎回来，亮哥 👋</div>
+          <div class="h2">今天有 <b id="dbTodo">3</b> 项待办、<b id="dbHw">2</b> 条 QQ 作业待确认，下面是系统实时状态。</div>
+          <div class="card-row">
+            <div class="stat-card">
+              <div class="stat-label">后端服务 / 模型</div>
+              <div class="stat-value" id="dbModel">qwen2.5:7b · 正常</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">QQ 作业扫描</div>
+              <div class="stat-value" id="dbScanner">运行中 · 0 待确认</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">今日待办 / 作业</div>
+              <div class="stat-value" id="dbToday">3 待办 · 2 待确认</div>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" data-goto="chat">💬 发起智能对话</button>
+            <button class="btn btn-outline" data-goto="manual">📝 手动添加日程</button>
+          </div>
+          <div class="card">
+            <div class="card-head">近期动态</div>
+            <div class="activity">
+              <div class="act-item">• 10:24 作业《数据结构 Lab3》已由主号确认并加入 iCloud 日历</div>
+              <div class="act-item">• 09:50 收到计网群老师图片通知，OCR 存档完成</div>
+              <div class="act-item">• 昨天 智能对话：已创建「周五 18:00 行策期末报告」待办</div>
+              <div class="act-item">• 昨天 NapCat 断线 12s 后自动重连成功</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ 智能对话 ============ -->
+        <section class="page hidden" id="page-chat" data-route="chat">
+          <div class="chat-wrap">
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input">
+              <input id="chatInput" type="text" placeholder="输入日程或需求，例如：明天下午5点图书馆打游戏2小时" autocomplete="off" />
+              <button class="btn btn-primary" id="chatSend">发送</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============ 手动添加 ============ -->
+        <section class="page hidden" id="page-manual" data-route="manual">
+          <div class="form-card">
+            <div class="form-title">手动添加日程 / 待办</div>
+            <div class="form-sub">绕过 AI，直接写入 iCloud 日历（CalDAV）</div>
+
+            <label class="field-label">类型 item_type · Event=日程/会议，Todo=待办/提醒</label>
+            <div class="seg" id="manualType">
+              <button class="seg-btn active" data-type="Event">📅 Event 日程</button>
+              <button class="seg-btn" data-type="Todo">📌 Todo 待办</button>
+            </div>
+
+            <label class="field-label">标题 summary *</label>
+            <input class="inp" id="mSummary" placeholder="产品需求评审会议" />
+
+            <label class="field-label">开始时间 start_time * · 格式 YYYY-MM-DDTHH:MM:SS（不带时区）</label>
+            <div class="row-2">
+              <input class="inp" id="mDate" type="date" />
+              <input class="inp" id="mTime" type="time" value="18:00" />
+            </div>
+
+            <label class="field-label">持续时长 duration_minutes（仅 Event 生效）</label>
+            <input class="inp" id="mDuration" placeholder="60（分钟）" />
+
+            <label class="field-label">地点 / 会议链接 location</label>
+            <input class="inp" id="mLocation" placeholder="图书馆 / https://meeting.tencent.com/xxx" />
+
+            <label class="field-label">关联 URL url</label>
+            <input class="inp" id="mUrl" placeholder="https://example.com/..." />
+
+            <label class="field-label">备注 description</label>
+            <textarea class="inp area" id="mDesc" placeholder="可选，填写备注信息…"></textarea>
+
+            <button class="btn btn-primary full" id="manualSubmit">🚀 直接提交至 iCloud</button>
+          </div>
+        </section>
+
+        <!-- ============ QQ 作业 ============ -->
+        <section class="page hidden" id="page-homework" data-route="homework">
+          <div class="toolbar">
+            <div class="chips" id="hwChips">
+              <button class="chip active" data-status="all">全部 <span id="cntAll">0</span></button>
+              <button class="chip" data-status="pending">待确认 <span id="cntPending">0</span></button>
+              <button class="chip" data-status="confirmed">已确认 <span id="cntConfirmed">0</span></button>
+              <button class="chip" data-status="ignored">已忽略 <span id="cntIgnored">0</span></button>
+            </div>
+            <button class="btn btn-outline sm" id="hwRefresh">🔄 刷新</button>
+          </div>
+          <div class="card list-card">
+            <div class="table-head">
+              <div class="th th-sub">科目 / 作业</div>
+              <div class="th">截止</div>
+              <div class="th">群</div>
+              <div class="th">置信度</div>
+              <div class="th">状态</div>
+            </div>
+            <div id="hwRows"></div>
+            <div class="empty hidden" id="hwEmpty">暂无作业数据</div>
+          </div>
+        </section>
+
+        <!-- ============ 讲座 / 通知 ============ -->
+        <section class="page hidden" id="page-lecture" data-route="lecture">
+          <div class="h2" id="lecNote">白名单群图片经 OCR 后存档于此（Web 只读）。</div>
+          <div class="card-grid" id="lecGrid"></div>
+          <div class="empty hidden" id="lecEmpty">暂无讲座 / 通知存档</div>
+        </section>
+
+        <!-- ============ 连接状态 ============ -->
+        <section class="page hidden" id="page-status" data-route="status">
+          <div class="h1 sm">连接与运行状态</div>
+          <div class="status-list" id="statusList"></div>
+          <div class="card">
+            <div class="card-head">事件 / 错误日志</div>
+            <div class="activity" id="statusLog"></div>
+          </div>
+          <div class="h1 sm">接口契约速查（前后端数据格式约定）</div>
+          <div class="card list-card">
+            <div class="table-head">
+              <div class="th" style="width:90px">方法</div>
+              <div class="th" style="width:280px">路径</div>
+              <div class="th">说明 / 请求·响应</div>
+            </div>
+            <div class="api-row"><div class="th" style="width:90px;color:#1a8f3c;font-weight:700">GET</div><div class="th" style="width:280px;font-weight:600">/api/health</div><div class="th" style="font-weight:400;color:#7a7a7a">健康检查 → {status, agent_model, timezone}</div></div>
+            <div class="api-row"><div class="th" style="width:90px;color:#0066cc;font-weight:700">POST</div><div class="th" style="width:280px;font-weight:600">/api/chat</div><div class="th" style="font-weight:400;color:#7a7a7a">自然语言建日程 · 请求 {text, history?} → {status, message, data}</div></div>
+            <div class="api-row"><div class="th" style="width:90px;color:#0066cc;font-weight:700">POST</div><div class="th" style="width:280px;font-weight:600">/api/manual-item</div><div class="th" style="font-weight:400;color:#7a7a7a">手动建日程 · 请求 CalendarItemSchema → {status, message, data}</div></div>
+            <div class="api-row"><div class="th" style="width:90px;color:#1a8f3c;font-weight:700">GET</div><div class="th" style="width:280px;font-weight:600">/api/homework/items</div><div class="th" style="font-weight:400;color:#7a7a7a">作业落库列表（权威）→ {items:[subject, deadline, status, confidence…]}</div></div>
+            <div class="api-row"><div class="th" style="width:90px;color:#1a8f3c;font-weight:700">GET</div><div class="th" style="width:280px;font-weight:600">/api/napcat/status</div><div class="th" style="font-weight:400;color:#7a7a7a">NapCat 连接 / 扫描器运行 → {connected, scanner_running}</div></div>
+            <div class="api-row"><div class="th" style="width:90px;color:#1a8f3c;font-weight:700">GET</div><div class="th" style="width:280px;font-weight:600">/api/lecture/notes</div><div class="th" style="font-weight:400;color:#7a7a7a">讲座 OCR 存档 → {notes:[ocr_md, status…], pending}</div></div>
+            <div class="api-row"><div class="th" style="width:90px;color:#1a8f3c;font-weight:700">GET/POST</div><div class="th" style="width:280px;font-weight:600">/api/config/whitelist</div><div class="th" style="font-weight:400;color:#7a7a7a">白名单读取 / 更新 → {homework_groups, image_groups}</div></div>
+          </div>
+        </section>
+
+        <!-- ============ 配置 / 白名单 ============ -->
+        <section class="page hidden" id="page-config" data-route="config">
+          <div class="h1 sm">配置 / 白名单</div>
+          <div class="h2">编辑两个群白名单，保存后重启 homework 扫描器生效。白名单为空 = 关闭对应扫描。</div>
+
+          <div class="card config-card">
+            <div class="card-head">🤖 作业扫描群 <span class="muted">qq.group_whitelist</span></div>
+            <div class="config-desc">仅这些群、且发送人为老师（群主/管理员或指定 QQ）的作业会被识别。</div>
+            <div class="chips-edit" id="hwWhitelist"></div>
+            <div class="add-row">
+              <input class="inp sm" id="hwAdd" type="number" placeholder="输入群号，如 1103480618" />
+              <button class="btn btn-outline sm" id="hwAddBtn">+ 添加</button>
+              <button class="btn btn-primary sm" id="hwSaveBtn">💾 保存作业白名单</button>
+            </div>
+          </div>
+
+          <div class="card config-card">
+            <div class="card-head">🖼️ 图片 OCR 群 <span class="muted">image.group_whitelist</span></div>
+            <div class="config-desc">这些群里的所有图片都视为讲座/通知，直接落盘 + OCR 存档（不要求发送人身份）。</div>
+            <div class="chips-edit" id="imgWhitelist"></div>
+            <div class="add-row">
+              <input class="inp sm" id="imgAdd" type="number" placeholder="输入群号，如 1104620939" />
+              <button class="btn btn-outline sm" id="imgAddBtn">+ 添加</button>
+              <button class="btn btn-primary sm" id="imgSaveBtn">💾 保存图片白名单</button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast hidden" id="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>
