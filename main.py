@@ -128,6 +128,67 @@ def _free_port(port: int) -> None:
         print(f"[Planme] 已清理旧进程，继续启动...")
 
 
+def _setup_logging() -> None:
+    """配置运行日志：所有输出同时写控制台与 planme.log（追加模式，续写不重建）。
+
+    - 幂等：重复调用（如 uvicorn --reload 的 worker 子进程重新导入本模块）不会重复包装；
+    - 文件以 'a' 模式打开，每次启动续写历史日志而非清空；
+    - 通过 Tee 包装 sys.stdout/stderr，控制台与文件同步输出；
+    - uvicorn 仍走默认控制台日志，由 Tee 一并落盘，避免重复写入。
+    """
+    if getattr(sys.stdout, "_planme_teed", False):
+        return
+
+    import io
+    from datetime import datetime
+
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "planme.log")
+    try:
+        log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+
+    class _Tee(io.TextIOBase):
+        _planme_teed = True
+
+        def __init__(self, console, file):
+            self._console = console
+            self._file = file
+
+        def write(self, s):
+            self._console.write(s)
+            self._file.write(s)
+            return len(s)
+
+        def flush(self):
+            self._console.flush()
+            self._file.flush()
+
+        @property
+        def encoding(self):
+            return getattr(self._console, "encoding", None) or "utf-8"
+
+        def isatty(self):
+            return getattr(self._console, "isatty", lambda: False)()
+
+    sys.stdout = _Tee(sys.stdout, log_file)
+    sys.stderr = _Tee(sys.stderr, log_file)
+
+    sep = "=" * 60
+    banner = (
+        f"\n{sep}\n"
+        f"  Planme 启动  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"{sep}\n"
+    )
+    sys.stdout.write(banner)
+    sys.stdout.flush()
+
+
+# 模块级安装日志：无论是 `python main.py` 入口进程，还是 uvicorn --reload 拉起的
+# worker 子进程（会重新导入本模块），都会各自把输出追加到 planme.log。
+_setup_logging()
+
+
 def _wait_and_open_ui() -> None:
     """后台线程：等服务端口就绪后，自动用默认浏览器打开前端 UI。
 
