@@ -54,6 +54,143 @@ function esc(s) {
     .replace(/"/g, '&quot;');
 }
 
+/* 简单 Markdown → HTML（用于 lecture OCR 展示） */
+function inlineFmt(s) {
+  return s
+    .replace(/\*\*\*(.*?)\*\*\*/g, '<strong class="md-strong"><em class="md-em">$1</em></strong>')
+    .replace(/\*\*(.*?)\*\*/g, '<strong class="md-strong">$1</strong>')
+    .replace(/\*(.*?)\*/g, '<em class="md-em">$1</em>');
+}
+
+function renderMd(md) {
+  if (!md) return '';
+  const codeBlocks = [];
+  let text = esc(md);
+  text = text.replace(/```([\s\S]*?)```/g, (_, code) => {
+    codeBlocks.push(`<pre class="md-code"><code>${code}</code></pre>`);
+    return `\n<!--CODEBLOCK${codeBlocks.length - 1}-->\n`;
+  });
+  text = text.replace(/`([^`]+)`/g, '<code class="md-code-inline">$1</code>');
+
+  // 解析为 token：heading / list_item / blank / paragraph / codeblock
+  const tokens = [];
+  for (let raw of text.split('\n')) {
+    const cb = raw.match(/<!--CODEBLOCK(\d+)-->/);
+    if (cb) {
+      tokens.push({ kind: 'codeblock', index: parseInt(cb[1], 10) });
+      continue;
+    }
+    const h = raw.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      tokens.push({ kind: 'heading', level: h[1].length, text: h[2] });
+      continue;
+    }
+    if (raw.trim() === '') {
+      tokens.push({ kind: 'blank' });
+      continue;
+    }
+    const leading = raw.match(/^(\s*)/)[1].length;
+    const trimmed = raw.trimStart();
+    const depth = Math.floor(leading / 2);
+    const ul = trimmed.match(/^[-*]\s+(.*)$/);
+    const ol = trimmed.match(/^(\d+)\.\s+(.*)$/);
+    if (ul) {
+      tokens.push({ kind: 'list_item', type: 'ul', depth, text: ul[1] });
+      continue;
+    }
+    if (ol) {
+      tokens.push({ kind: 'list_item', type: 'ol', depth, order: ol[1], text: ol[2] });
+      continue;
+    }
+    tokens.push({ kind: 'paragraph', text: raw });
+  }
+
+  const out = [];
+  const listStack = []; // {type, depth}
+  let openLi = false;   // 是否有未关闭的 <li>
+
+  const closeLi = () => {
+    if (openLi) { out.push('</li>'); openLi = false; }
+  };
+  const closeListsTo = (depth, type) => {
+    // 关闭到指定深度/类型；同时关闭未关闭的 li
+    while (listStack.length) {
+      const top = listStack[listStack.length - 1];
+      if (top.depth < depth) break;
+      if (top.depth === depth && top.type === type) break;
+      closeLi();
+      listStack.pop();
+      out.push(top.type === 'ul' ? '</ul>' : '</ol>');
+    }
+  };
+  const ensureList = (type, depth) => {
+    if (listStack.length === 0) {
+      listStack.push({ type, depth });
+      out.push(`<${type} class="md-${type}">`);
+      return;
+    }
+    const top = listStack[listStack.length - 1];
+    if (top.depth === depth && top.type === type) {
+      // 同级同类型：关闭前一个 li，开新 li
+      closeLi();
+      return;
+    }
+    if (top.depth < depth) {
+      // 进入子列表：不关闭父 li
+      listStack.push({ type, depth });
+      out.push(`<${type} class="md-${type}">`);
+      return;
+    }
+    // 回溯到合适层级
+    closeListsTo(depth, type);
+    if (listStack.length && listStack[listStack.length - 1].depth === depth && listStack[listStack.length - 1].type === type) {
+      closeLi();
+      return;
+    }
+    listStack.push({ type, depth });
+    out.push(`<${type} class="md-${type}">`);
+  };
+  const flushLists = () => {
+    closeLi();
+    while (listStack.length) {
+      const top = listStack.pop();
+      out.push(top.type === 'ul' ? '</ul>' : '</ol>');
+    }
+  };
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok.kind === 'codeblock') {
+      closeLi();
+      flushLists();
+      out.push(codeBlocks[tok.index]);
+      continue;
+    }
+    if (tok.kind === 'heading') {
+      closeLi();
+      flushLists();
+      out.push(`<h${tok.level} class="md-h${tok.level}">${inlineFmt(tok.text)}</h${tok.level}>`);
+      continue;
+    }
+    if (tok.kind === 'blank') continue; // 空行不切断列表
+    if (tok.kind === 'paragraph') {
+      closeLi();
+      flushLists();
+      out.push(`<p class="md-p">${inlineFmt(tok.text)}</p>`);
+      continue;
+    }
+    if (tok.kind === 'list_item') {
+      ensureList(tok.type, tok.depth);
+      const valueAttr = tok.order != null ? ` value="${tok.order}"` : '';
+      // 统一延迟关闭 li，便于嵌套子列表；在切换/离开列表时由 closeLi 关闭
+      out.push(`<li${valueAttr}>${inlineFmt(tok.text)}`);
+      openLi = true;
+    }
+  }
+  flushLists();
+  return out.join('\n');
+}
+
 /* ---------------- 路由 ---------------- */
 function navigate(route) {
   state.route = route;
@@ -311,7 +448,7 @@ async function loadLecture() {
     grid.innerHTML = '';
     document.getElementById('lecEmpty').classList.toggle('hidden', notes.length > 0);
     notes.forEach(n => {
-      const st = n.status === 'done' ? { t: '✅ 已存档', c: 'green' }
+      const st = n.status === 'active' || n.status === 'done' ? { t: '✅ 已存档', c: 'green' }
         : n.status === 'pending' ? { t: '⏳ 排队 OCR', c: 'amber' }
         : { t: '⚠️ OCR 失败', c: 'red' };
       const card = document.createElement('div');
@@ -323,7 +460,7 @@ async function loadLecture() {
           <span class="badge ${st.c}">${st.t}</span>
         </div>
         <div class="note-time">${esc(n.created_at || '')}</div>
-        <div class="note-ocr">${esc(n.ocr_md || '（暂无 OCR 内容）')}</div>
+        <div class="note-ocr">${n.ocr_md ? renderMd(n.ocr_md) : '（暂无 OCR 内容）'}</div>
         ${link ? `<div class="note-foot">🔗 原图 · ${esc(link)}</div>` : ''}`;
       grid.appendChild(card);
     });
