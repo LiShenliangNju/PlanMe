@@ -25,3 +25,4 @@ Pillow>=10.0
 
 # 工具
 requests>=2.31
+psutil>=5.9

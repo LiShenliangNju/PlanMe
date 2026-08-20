@@ -62,22 +62,88 @@ function inlineFmt(s) {
     .replace(/\*(.*?)\*/g, '<em class="md-em">$1</em>');
 }
 
+function parseTable(block) {
+  const lines = block.trim().split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 2) return null;
+  const sep = lines[1].trim();
+  if (!/^\|(?:\s*:?-+:?\s*\|)+$/.test(sep)) return null;
+  const headers = lines[0].split('|').slice(1, -1).map(h => h.trim());
+  const aligns = sep.split('|').slice(1, -1).map(c => {
+    c = c.trim();
+    if (c.startsWith(':') && c.endsWith(':')) return 'center';
+    if (c.endsWith(':')) return 'right';
+    return 'left';
+  });
+  let html = '<table class="md-table"><thead><tr>';
+  headers.forEach((h, i) => {
+    html += `<th style="text-align:${aligns[i] || 'left'}">${inlineFmt(esc(h))}</th>`;
+  });
+  html += '</tr></thead><tbody>';
+  for (let i = 2; i < lines.length; i++) {
+    const cells = lines[i].split('|').slice(1, -1).map(c => c.trim());
+    html += '<tr>';
+    headers.forEach((_, j) => {
+      const v = cells[j] != null ? cells[j] : '';
+      html += `<td style="text-align:${aligns[j] || 'left'}">${inlineFmt(esc(v))}</td>`;
+    });
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  return html;
+}
+
 function renderMd(md) {
   if (!md) return '';
   const codeBlocks = [];
-  let text = esc(md);
-  text = text.replace(/```([\s\S]*?)```/g, (_, code) => {
-    codeBlocks.push(`<pre class="md-code"><code>${code}</code></pre>`);
-    return `\n<!--CODEBLOCK${codeBlocks.length - 1}-->\n`;
+  const mdWrapBlocks = [];
+  const tableBlocks = [];
+  let text = md;
+
+  // 1) 先提取代码块（raw code 需要 escape）
+  //    用 \x00 做占位符边界，避免后续 esc() 破坏 HTML 注释风格的标记
+  //    特别处理 ```markdown：OCR 模型常把整段结果包在 markdown 代码块里，
+  //    这种情况下应把内部内容当 Markdown 再渲染，而不是原样显示代码。
+  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const l = (lang || '').trim().toLowerCase();
+    if (l === 'markdown' || l === 'md') {
+      mdWrapBlocks.push(renderMd(code));
+      return `\n\x00MDWRAP${mdWrapBlocks.length - 1}\x00\n`;
+    }
+    codeBlocks.push(`<pre class="md-code"><code>${esc(code)}</code></pre>`);
+    return `\n\x00CODEBLOCK${codeBlocks.length - 1}\x00\n`;
   });
+
+  // 2) 提取 Markdown 表格
+  const tableRe = /((?:^\|[^\n]*\|(?:\r?\n|$))+)/gm;
+  text = text.replace(tableRe, (block) => {
+    const html = parseTable(block);
+    if (!html) return block;
+    tableBlocks.push(html);
+    return `\n\x00TABLEBLOCK${tableBlocks.length - 1}\x00\n`;
+  });
+
+  // 3) 对其余普通文本做 HTML 转义
+  text = esc(text);
+
+  // 4) 行内代码
   text = text.replace(/`([^`]+)`/g, '<code class="md-code-inline">$1</code>');
 
-  // 解析为 token：heading / list_item / blank / paragraph / codeblock
+  // 5) 解析为 token：heading / list_item / blank / paragraph / codeblock / tableblock / mdwrap
   const tokens = [];
   for (let raw of text.split('\n')) {
-    const cb = raw.match(/<!--CODEBLOCK(\d+)-->/);
+    const cb = raw.match(/\x00CODEBLOCK(\d+)\x00/);
     if (cb) {
       tokens.push({ kind: 'codeblock', index: parseInt(cb[1], 10) });
+      continue;
+    }
+    const mw = raw.match(/\x00MDWRAP(\d+)\x00/);
+    if (mw) {
+      tokens.push({ kind: 'mdwrap', index: parseInt(mw[1], 10) });
+      continue;
+    }
+    const tb = raw.match(/\x00TABLEBLOCK(\d+)\x00/);
+    if (tb) {
+      tokens.push({ kind: 'tableblock', index: parseInt(tb[1], 10) });
       continue;
     }
     const h = raw.match(/^(#{1,6})\s+(.*)$/);
@@ -160,10 +226,14 @@ function renderMd(md) {
 
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
-    if (tok.kind === 'codeblock') {
+    if (tok.kind === 'codeblock' || tok.kind === 'tableblock' || tok.kind === 'mdwrap') {
       closeLi();
       flushLists();
-      out.push(codeBlocks[tok.index]);
+      out.push(
+        tok.kind === 'codeblock' ? codeBlocks[tok.index]
+        : tok.kind === 'tableblock' ? tableBlocks[tok.index]
+        : mdWrapBlocks[tok.index]
+      );
       continue;
     }
     if (tok.kind === 'heading') {

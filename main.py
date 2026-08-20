@@ -13,9 +13,15 @@ Streamlit 过渡界面已移除（web/app.py 已删除），不再以子进程�
 """
 import os
 import socket
+import sys
 import threading
 import time
 import webbrowser
+
+# 确保日志/print 在重定向到文件时也能实时落盘
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
 
 import uvicorn
 
@@ -26,6 +32,100 @@ app = create_app()
 # uvicorn 监听端口，同时用于拼接自动打开的前端地址
 PORT = int(os.getenv("PORT", "8000"))
 UI_URL = f"http://localhost:{PORT}/ui/"
+
+
+def _is_planme_process(cmdline: list[str]) -> bool:
+    if not cmdline:
+        return False
+    joined = " ".join(cmdline).lower()
+    return any(k in joined for k in ("main.py", "planme", "uvicorn"))
+
+
+def _free_port(port: int) -> None:
+    """若端口被旧的 Planme/uvicorn 进程占用，则终止它；若是其他进程则退出并提示。
+
+    uvicorn --reload 模式下会同时存在 reloader 进程和 server 子进程；仅杀掉监听端口的
+    server 子进程会被 reloader 立即重启，因此还要顺带清理所有 Planme/uvicorn 相关进程。
+    """
+    try:
+        import psutil
+    except ImportError:  # 降级：仅检测，不自动杀
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            try:
+                s.connect(("127.0.0.1", port))
+            except OSError:
+                return
+        print(f"[Planme] 端口 {port} 已被占用，但当前环境未安装 psutil，无法自动判断/终止旧进程。")
+        print(f"[Planme] 请先手动释放端口 {port}，或执行 `pip install psutil` 后重试。")
+        sys.exit(1)
+
+    killed = set()
+    other = []
+
+    # 1) 先处理监听目标端口的进程
+    for conn in psutil.net_connections(kind="inet"):
+        if conn.laddr.port != port:
+            continue
+        if not conn.pid:
+            continue
+        try:
+            p = psutil.Process(conn.pid)
+            cmdline = p.cmdline() or []
+            if _is_planme_process(cmdline):
+                print(f"[Planme] 发现旧进程 PID {conn.pid} 占用端口 {port}，正在终止...")
+                p.terminate()
+                try:
+                    p.wait(timeout=5)
+                except psutil.TimeoutExpired:
+                    p.kill()
+                    p.wait(timeout=3)
+                killed.add(conn.pid)
+            else:
+                other.append((conn.pid, " ".join(cmdline)[:80]))
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            print(f"[Planme] 无权限查询/终止 PID {conn.pid}，请手动释放端口 {port}")
+            sys.exit(1)
+
+    if other:
+        print(f"[Planme] 端口 {port} 被非 Planme 进程占用：")
+        for pid, cmd in other:
+            print(f"  PID {pid}: {cmd}")
+        print("[Planme] 请先手动释放端口后重试。")
+        sys.exit(1)
+
+    # 2) 清理所有 Planme/uvicorn 相关 python 进程（含 uvicorn reloader），避免端口被重启
+    my_pid = os.getpid()
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        if not p.info["name"] or "python" not in p.info["name"].lower():
+            continue
+        pid = p.info["pid"]
+        if pid == my_pid or pid in killed:
+            continue
+        cmdline = p.info["cmdline"] or []
+        if not _is_planme_process(cmdline):
+            continue
+        try:
+            print(f"[Planme] 发现相关旧进程 PID {pid}，正在终止...")
+            p.terminate()
+            try:
+                p.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                p.kill()
+                p.wait(timeout=3)
+            killed.add(pid)
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            print(f"[Planme] 无权限终止 PID {pid}，请手动释放端口 {port}")
+            sys.exit(1)
+
+    if killed:
+        # 给操作系统一点时间回收端口
+        time.sleep(0.5)
+        print(f"[Planme] 已清理旧进程，继续启动...")
 
 
 def _wait_and_open_ui() -> None:
@@ -57,5 +157,6 @@ def _wait_and_open_ui() -> None:
 
 
 if __name__ == "__main__":
+    _free_port(PORT)
     threading.Thread(target=_wait_and_open_ui, daemon=True).start()
     uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
