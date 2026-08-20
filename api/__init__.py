@@ -9,6 +9,7 @@ from .schedule import router as schedule_router
 from .homework import router as homework_router
 from .napcat import router as napcat_router
 from .lecture import router as lecture_router
+from .activity import router as activity_router
 from .config import router as config_router
 
 
@@ -17,4 +18,5 @@ def register_routers(app: FastAPI) -> None:
     app.include_router(homework_router)   # /api/homework/*
     app.include_router(napcat_router)     # /api/napcat/*
     app.include_router(lecture_router)     # /api/lecture/*
+    app.include_router(activity_router)    # /api/activity
     app.include_router(config_router)      # /api/config/whitelist

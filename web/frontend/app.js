@@ -257,6 +257,25 @@ async function loadDashboard() {
     document.getElementById('dbHw').textContent = pending;
     document.getElementById('dbToday').textContent = `${Math.max(3, todo)} 待办 · ${pending} 待确认`;
   } catch (_) { /* 静默 */ }
+  await loadActivity();
+}
+
+async function loadActivity() {
+  const box = document.getElementById('activityList');
+  if (!box) return;
+  try {
+    const r = await api('GET', '/api/activity?days=3');
+    const acts = (r && r.activities) || [];
+    if (!acts.length) {
+      box.innerHTML = '<div class="act-item">• 近三天暂无动态</div>';
+      return;
+    }
+    box.innerHTML = acts.map(a =>
+      `<div class="act-item">• ${esc(a.formatted || '')} ${esc(a.text || '')}</div>`
+    ).join('');
+  } catch (_) {
+    box.innerHTML = '<div class="act-item">• 近期动态加载失败</div>';
+  }
 }
 
 /* ---------------- 智能对话（多轮） ---------------- */
