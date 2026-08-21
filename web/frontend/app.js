@@ -277,6 +277,7 @@ function navigate(route) {
 
   // 离开对话页时不打断；进入各页按需加载数据
   if (route === 'dashboard') loadDashboard();
+  if (route === 'chat') renderChat();
   if (route === 'homework') loadHomework();
   if (route === 'lecture') loadLecture();
   if (route === 'status') loadStatus();

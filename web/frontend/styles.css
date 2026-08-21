@@ -42,17 +42,30 @@ body {
 .sidebar {
   width: 240px;
   flex-shrink: 0;
-  background: var(--sidebar);
   display: flex;
   flex-direction: column;
   padding-top: 26px;
   position: sticky;
   top: 0;
   height: 100vh;
+  /* 悬浮玻璃：从左侧浮出，右侧圆角 + 投影与主内容区分层 */
+  border-radius: 0 22px 22px 0;
+  background-color: rgba(38, 38, 41, 0.30);
+  -webkit-backdrop-filter: blur(34px) saturate(165%) brightness(1.06);
+  backdrop-filter: blur(34px) saturate(165%) brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset -1px 0 0 rgba(255, 255, 255, 0.10),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.22),
+    16px 0 42px rgba(2, 6, 14, 0.16),
+    0 24px 60px rgba(2, 6, 14, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: none;
+  overflow: hidden;
 }
 .brand { padding: 0 20px; }
 .brand-logo { font-size: 20px; font-weight: 700; color: #fff; }
-.brand-sub { font-size: 12px; color: var(--nav-label); margin-top: 4px; }
+.brand-sub { font-size: 12px; color: rgba(255, 255, 255, 0.48); margin-top: 4px; }
 .nav-label {
   margin: 48px 22px 8px;
   font-size: 11px;
@@ -78,8 +91,15 @@ body {
   user-select: none;
   transition: background 0.15s;
 }
-.nav-item:hover { background: rgba(255, 255, 255, 0.06); }
-.nav-item.active { background: rgba(255, 255, 255, 0.10); color: #fff; }
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+}
+.nav-item.active {
+  background: rgba(255, 255, 255, 0.11);
+  color: #fff;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.13);
+}
 .nav-bar {
   position: absolute;
   left: -12px;
@@ -100,16 +120,21 @@ body {
 }
 
 /* ---------------- 主区域 ---------------- */
-.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: 12px;
+}
 .topbar {
-  height: 64px;
+  height: 56px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 28px 0 28px;
+  padding: 0 24px;
   background: #fff;
-  border-bottom: 1px solid var(--hairline);
 }
 .topbar-title { display: flex; flex-direction: column; gap: 2px; }
 .tt-main { font-size: 20px; font-weight: 700; color: var(--text-1); }
@@ -134,7 +159,7 @@ body {
 .user-name { font-size: 13px; font-weight: 500; }
 
 .content { flex: 1; overflow-y: auto; }
-.page { padding: 32px; }
+.page { padding: 24px 32px 32px 32px; }
 .page.hidden { display: none; }
 
 /* ---------------- 标题 / 文本 ---------------- */
@@ -377,3 +402,147 @@ b { color: var(--text-1); }
 }
 .toast.err { background: var(--red-text); }
 .toast.ok { background: var(--green-text); }
+
+/* ============================================================
+   Planme · Liquid Glass 主题层（叠加，可整体移除）
+   思路：固定渐变流体背景 + 各面板转为半透明玻璃
+   磨砂基底 backdrop-filter(blur+saturate+brightness)
+   + 镜面高光 + 四边色散 + 0.5px ring + 悬浮投影
+   + 光标聚光灯（由 index.html 内联脚本写入 --mx/--my）
+   不改动布局、不破坏可读性（高不透明度填充 + 低对比渐变）
+   ============================================================ */
+:root {
+  --glass-blur: 22px;          /* 模糊半径（Apple 控制中心/菜单栏档 18~24px） */
+  --glass-sat: 165%;           /* 饱和度补偿：blur 会去色，必须拉回 */
+  --glass-bright: 1.06;        /* 提亮，避免玻璃发灰 */
+  --glass-tint: 255, 255, 255; /* 亮色玻璃染色 RGB */
+  --glass-spec: rgba(255, 255, 255, 0.7);   /* 顶部高光线 */
+  --glass-ring: rgba(255, 255, 255, 0.45);  /* 0.5px 极细玻璃边 */
+  --glass-shadow: 0 10px 34px rgba(31, 45, 80, 0.14);
+  --spot-color: rgba(120, 170, 255, 0.20);  /* 光标聚光灯颜色 */
+}
+
+/* —— 固定流体背景（柔和 mesh，缓慢漂移；尊重减弱动效偏好） —— */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20%;
+  z-index: -1;
+  background:
+    radial-gradient(38% 38% at 18% 22%, rgba(94, 150, 255, 0.30), transparent 60%),
+    radial-gradient(42% 42% at 82% 18%, rgba(180, 140, 255, 0.26), transparent 62%),
+    radial-gradient(46% 46% at 70% 82%, rgba(120, 200, 255, 0.24), transparent 64%),
+    radial-gradient(40% 40% at 25% 85%, rgba(255, 180, 200, 0.20), transparent 62%),
+    linear-gradient(135deg, #eef2f9, #e9eef7);
+  filter: saturate(115%);
+  animation: pmFluid 26s ease-in-out infinite alternate;
+}
+@keyframes pmFluid {
+  0%   { transform: translate3d(-2%, -1%, 0) scale(1.05); }
+  100% { transform: translate3d(3%, 2%, 0) scale(1.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body::before { animation: none; }
+}
+
+/* —— 玻璃通用：磨砂基底 + 隔离模糊 —— */
+.glass,
+.sidebar, .topbar,
+.card, .stat-card, .form-card, .note-card, .status-item,
+.pill, .chip, .btn-outline, .chat-input, .msg,
+.seg-btn, .tag, .list-card, .config-card {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat)) brightness(var(--glass-bright));
+}
+
+/* —— 侧边栏：深色玻璃 —— */
+.sidebar {
+  background-color: rgba(38, 38, 41, 0.66);
+  -webkit-backdrop-filter: blur(26px) saturate(140%);
+  backdrop-filter: blur(26px) saturate(140%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 10px 34px rgba(2, 6, 14, 0.30);
+}
+
+/* —— 顶栏：圆角浮岛玻璃 —— */
+.topbar {
+  margin: 0 18px 14px 16px;
+  border-radius: 18px;
+  background-color: rgba(255, 255, 255, 0.60);
+  -webkit-backdrop-filter: blur(26px) saturate(170%) brightness(1.06);
+  backdrop-filter: blur(26px) saturate(170%) brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.45),
+    0 10px 30px rgba(31, 45, 80, 0.10),
+    0 4px 12px rgba(31, 45, 80, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.48);
+}
+
+/* —— 卡片类：亮色玻璃 + 高光 + 四边色散 + ring + 投影 —— */
+.card, .stat-card, .form-card, .note-card, .status-item,
+.list-card, .config-card {
+  background-color: rgba(var(--glass-tint), 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 var(--glass-spec),
+    inset 1px 0 0 rgba(0, 200, 255, 0.07),
+    inset -1px 0 0 rgba(255, 90, 200, 0.07),
+    inset 0 -1px 0 rgba(120, 255, 160, 0.05),
+    inset 0 0 0 0.5px var(--glass-ring),
+    var(--glass-shadow);
+}
+
+/* —— 胶囊 / 标签 / 分段按钮 / 输入框：轻玻璃 —— */
+.pill, .chip, .btn-outline, .seg-btn {
+  background-color: rgba(var(--glass-tint), 0.70);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 0 0 0.5px var(--glass-ring);
+}
+.seg-btn { background-color: rgba(var(--glass-tint), 0.55); }
+
+/* —— 对话气泡 —— */
+.msg.assistant {
+  background-color: rgba(var(--glass-tint), 0.80);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 0 0 0.5px var(--glass-ring),
+    var(--glass-shadow);
+}
+.msg.user {
+  -webkit-backdrop-filter: blur(10px) saturate(150%);
+  backdrop-filter: blur(10px) saturate(150%);
+  background-color: rgba(0, 102, 204, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.25),
+    var(--glass-shadow);
+}
+
+/* —— 光标聚光灯（写入 --mx/--my；默认在视窗外，不显示） —— */
+.spot {
+  background-image: radial-gradient(
+    170px circle at var(--mx, -999px) var(--my, -999px),
+    var(--spot-color), transparent 70%);
+}
+
+/* —— 主内容区透明，露出流体背景，让玻璃"浮"在上面 —— */
+.content { background: transparent; }
+.app { background: transparent; }
+
+/* —— 高端浏览器：SVG 边缘折射（仅 Chromium 支持 backdrop-filter:url） —— */
+@supports ((-webkit-backdrop-filter: url("#pmGlassRefraction")) or (backdrop-filter: url("#pmGlassRefraction"))) {
+  .glass,
+  .sidebar, .topbar,
+  .card, .stat-card, .form-card, .note-card, .status-item,
+  .pill, .chip, .btn-outline, .chat-input, .msg,
+  .seg-btn, .tag, .list-card, .config-card {
+    -webkit-backdrop-filter: url("#pmGlassRefraction");
+    backdrop-filter: url("#pmGlassRefraction");
+  }
+}
